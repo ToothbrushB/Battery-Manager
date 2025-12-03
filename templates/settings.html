@@ -1,0 +1,58 @@
+{% extends "layout.html" %}
+
+{% block title %}
+Settings
+{% endblock %}
+
+{% block main %}
+<div>
+    <h1>Settings</h1>
+    <form method="post" action="/settings">
+        {% for fieldset in config %}
+            <fieldset>
+                <legend>{{ fieldset.legend }}</legend>
+                {% for setting in fieldset.settings %}
+                    <div class="mb-3">
+                        {% if setting.type == "text" %}
+                        <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
+                        <input type="text" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value }}">
+                        {% elif setting.type == "checkbox" %}
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="{{ setting.id }}" name="{{ setting.name }}" {% if setting.value %}checked{% endif %}>
+                            <label class="form-check-label" for="{{ setting.id }}">{{ setting.label }}</label>
+                        </div>
+                        {% elif setting.type == "select" %}
+                        <select class="form-select" id="{{ setting.id }}" name="{{ setting.name }}">
+                            {% for option in setting.options %}
+                            <option value="{{ option.value }}" {% if option.value == setting.value %}selected{% endif %}>{{ option.label }}</option>
+                            {% endfor %}
+                        </select>
+                        {% elif setting.type == "number" %}
+                        <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
+                        <input type="number" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value }}">
+                        {% elif setting.type == "textarea" %}
+                        <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
+                        <textarea class="form-control" id="{{ setting.id }}" name="{{ setting.name }}">{{ setting.value }}</textarea>
+                        {% elif setting.type == "radio" %}
+                        <label class="form-label">{{ setting.label }}</label>
+                        <div>
+                            {% for option in setting.options %}
+                            <div class="form-check">
+                                <input class="form-check-input" type="radio" name="{{ setting.name }}" id="{{ option.id }}" value="{{ option.value }}" {% if option.value == setting.value %}checked{% endif %}>
+                                <label class="form-check-label" for="{{ option.id }}">
+                                    {{ option.label }}
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            </fieldset>
+        {% endfor %}
+        </fieldset>
+        
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+</div>
+{% endblock %}
