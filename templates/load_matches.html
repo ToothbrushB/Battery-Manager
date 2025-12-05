@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+
+{% block title %}
+Load Matches
+{% endblock %}
+
+{% block main %}
+<div>
+    <h1>Load Matches From TBA</h1>
+    <form method="post" action="/load_matches">
+        <label for="event_key">TBA Event Key</label>
+        <input type="text" class="form-control mb-3" id="event_key" name="event_key" placeholder="Enter Event Key (e.g., 2024miket)">
+        <button type="submit" class="btn btn-primary">Load Matches</button>
+    </form>
+</div>
+{% endblock %}

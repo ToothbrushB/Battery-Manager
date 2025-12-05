@@ -6,72 +6,82 @@ Home
 
 {% block main %}
 <div>
-    <h1>Ho Ho Ho! Welcome to the Battery Managing Website!</h1>
-        <p>❄️🎅🎄🦌☃️❄️</p>
+    <h1>Battery Manager Home</h1>
 
-        <div class="d-flex">
-            <table class="table">
-                <thead>
-                    <th scope="col">Tag</th>
-                    <th scope="col">SoC</th>
-                    <th scope="col">Resistance</th>
-                </thead>
-                <tr>
-                    <th scope="row">000035</th>
-                    <td>100%</td>
-                    <td>0.020</td>
-                </tr>
-                <tr>
-                    <th scope="row">000472</th>
-                    <td>74%</td>
-                    <td>0.020</td>
-                </tr>
-                <tr>
-                    <th scope="row">047294</th>
-                    <td>25%</td>
-                    <td>0.018</td>
-                </tr>
-                <tr>
-                    <th scope="row">003458</th>
-                    <td>10%</td>
-                    <td>0.030</td>
-                </tr>
-                <tr>
-                    <th scope="row">672935</th>
-                    <td>23%</td>
-                    <td>0.015</td>
-                </tr>
-                <tr>
-                    <th scope="row">004628</th>
-                    <td>85%</td>
-                    <td>0.018</td>
-                </tr>
-                <tr>
-                    <th scope="row">000874</th>
-                    <td>90%</td>
-                    <td>0.015</td>
-                </tr>
-                <tr>
-                    <th scope="row">000046</th>
-                    <td>100%</td>
-                    <td>0.022</td>
-                </tr>
-                <tr>
-                    <th scope="row">000003</th>
-                    <td>50%</td>
-                    <td>0.040</td>
-                </tr>
-                <tr>
-                    <th scope="row">000862</th>
-                    <td>90%</td>
-                    <td>0.012</td>
-                </tr>
-                <tr>
-                    <th scope="row">000365</th>
-                    <td>120%</td>
-                    <td>0.015</td>
-                </tr>
-            </table>
+    <div class="container">
+        <h2 class="me-3">Recommended Batteries</h2>
+        <div class="card" style="width: 18rem;">
+            <div class="card-body">
+                <h5 class="card-title">Battery Name Here</h5>
+                <p class="card-text">This is the battery you should use</p>
+                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#batteryModal">Info</button>
+            </div>
         </div>
+    </div>
+    <div class="container">
+        <h2 class="me-3">Battery Statuses</h2>
+        <table class="table">
+            <thead>
+                <th scope="col">Tag</th>
+                <th scope="col">Status</th>
+                <th scope="col">Resistance</th>
+            </thead>
+            <tr>
+                <th scope="row">000035</th>
+                <td><span class="badge text-bg-success">Charging 10hrs</span><i class="bi bi-battery-charging"></i></td>
+                <td>0.020</td>
+            </tr>
+            <tr>
+                <th scope="row">000472</th>
+                <td>74%</td>
+                <td>0.020</td>
+            </tr>
+            <tr>
+                <th scope="row">047294</th>
+                <td>25%</td>
+                <td>0.018</td>
+            </tr>
+            <tr>
+                <th scope="row">003458</th>
+                <td>10%</td>
+                <td>0.030</td>
+            </tr>
+            <tr>
+                <th scope="row">672935</th>
+                <td>23%</td>
+                <td>0.015</td>
+            </tr>
+            <tr>
+                <th scope="row">004628</th>
+                <td>85%</td>
+                <td>0.018</td>
+            </tr>
+            <tr>
+                <th scope="row">000874</th>
+                <td>90%</td>
+                <td>0.015</td>
+            </tr>
+            <tr>
+                <th scope="row">000046</th>
+                <td>100%</td>
+                <td>0.022</td>
+            </tr>
+            <tr>
+                <th scope="row">000003</th>
+                <td>50%</td>
+                <td>0.040</td>
+            </tr>
+            <tr>
+                <th scope="row">000862</th>
+                <td>90%</td>
+                <td>0.012</td>
+            </tr>
+            <tr>
+                <th scope="row">000365</th>
+                <td>120%</td>
+                <td>0.015</td>
+            </tr>
+        </table>
+    </div>
 </div>
 {% endblock %}

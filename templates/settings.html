@@ -15,7 +15,7 @@ Settings
                     <div class="mb-3">
                         {% if setting.type == "text" %}
                         <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
-                        <input type="text" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value }}">
+                        <input type="text" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value | e }}">
                         {% elif setting.type == "checkbox" %}
                         <div class="form-check">
                             <input type="checkbox" class="form-check-input" id="{{ setting.id }}" name="{{ setting.name }}" {% if setting.value %}checked{% endif %}>
@@ -24,15 +24,15 @@ Settings
                         {% elif setting.type == "select" %}
                         <select class="form-select" id="{{ setting.id }}" name="{{ setting.name }}">
                             {% for option in setting.options %}
-                            <option value="{{ option.value }}" {% if option.value == setting.value %}selected{% endif %}>{{ option.label }}</option>
+                            <option value="{{ option.value | e }}" {% if option.value == setting.value %}selected{% endif %}>{{ option.label }}</option>
                             {% endfor %}
                         </select>
                         {% elif setting.type == "number" %}
                         <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
-                        <input type="number" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value }}">
+                        <input type="number" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value | e }}">
                         {% elif setting.type == "textarea" %}
                         <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
-                        <textarea class="form-control" id="{{ setting.id }}" name="{{ setting.name }}">{{ setting.value }}</textarea>
+                        <textarea class="form-control" id="{{ setting.id }}" name="{{ setting.name }}">{{ setting.value | e }}</textarea>
                         {% elif setting.type == "radio" %}
                         <label class="form-label">{{ setting.label }}</label>
                         <div>
@@ -40,7 +40,7 @@ Settings
                             <div class="form-check">
                                 <input class="form-check-input" type="radio" name="{{ setting.name }}" id="{{ option.id }}" value="{{ option.value }}" {% if option.value == setting.value %}checked{% endif %}>
                                 <label class="form-check-label" for="{{ option.id }}">
-                                    {{ option.label }}
+                                    {{ option.label | e }}
                                 </label>
                             </div>
                             {% endfor %}

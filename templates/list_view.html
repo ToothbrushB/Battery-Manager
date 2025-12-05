@@ -7,6 +7,23 @@ List View
 {% block main %}
 <div>
     <h1>Ho Ho Ho! Look at This List</h1>
-    <p>❄️🎅🎄🦌☃️❄️</p>
+    <table class="table">
+        <thead>
+            <th scope="col">Tag</th>
+            <th scope="col">Name</th>
+            <th scope="col">Status</th>
+            <th scope="col">Location</th>
+        </thead>
+        <tbody>
+            {% for battery in batteries %}
+            <tr>
+                <td>{{ battery.asset_tag | e }}</td>
+                <td>{{ battery.name | e }}</td>
+                <td>{{ battery.status_label.name | e}}</td>
+                <td>{{ battery.location.name | e }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
 </div>
 {% endblock %}
