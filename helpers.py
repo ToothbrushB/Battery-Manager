@@ -3,13 +3,13 @@ import requests
 from flask import redirect, render_template, session
 from functools import wraps
 
-def snipe_it_get(endpoint, api_key, snipe_url):
+def snipe_it_get(endpoint, api_key, snipe_url, params=None):
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
         "Accept": "application/json"
     }
-    response = requests.get(snipe_url + endpoint, headers=headers)
+    response = requests.get(snipe_url + endpoint, headers=headers, params=params)
     return (response.status_code, response.json())
 
 def snipe_it_post(endpoint, api_key, snipe_url, data):

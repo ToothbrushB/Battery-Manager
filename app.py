@@ -7,6 +7,10 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from helpers import snipe_it_get, snipe_it_post
 from api import api
+import sqlite3
+
+connection = sqlite3.connect('database.db', check_same_thread=False)
+cursor = connection.cursor()
 
 # Configure application
 app = Flask(__name__)
@@ -53,9 +57,24 @@ config = [
                     "label": "TBA API Key",
                     "type": "text",
                     "value": "your-api-key-here",
+                },
+                {
+                    "id": "tba-event-key",
+                    "name": "tba-event-key",
+                    "label": "TBA Event Key",
+                    "type": "text",
+                    "value": "your-event-key-here",
+                },
+                {
+                    "id": "tba-team-key",
+                    "name": "tba-team-key",
+                    "label": "TBA Team Key",
+                    "type": "text",
+                    "value": "your-team-key-here",
                 }
             ]
-        }
+        },
+        
     ]
 
 def load_settings():
@@ -82,18 +101,17 @@ def index():
 
 @app.route("/list_view", methods=["GET"])
 def list_view():
-    (status, resp) = snipe_it_get("/hardware", os.getenv("SNIPE_API_KEY"), os.getenv("SNIPE_URL"))
+    (status, resp) = snipe_it_get("/hardware", os.getenv("SNIPE_API_KEY"), os.getenv("SNIPE_URL"), params={"model_id": 1, "limit": 1000})
     if status != 200:
         flash("Error fetching data from Snipe-IT: {}".format(resp), "error")
         
     # filter responses based on model id for batteries only
-    batteries = [item for item in resp['rows'] if item['model']['id'] == 1]
-    return render_template("list_view.html", batteries=batteries)
+
+    return render_template("list_view.html", batteries=resp['rows'])
 
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
-    
     if request.method == "POST":
         for section in config:
             for setting in section["settings"]:
@@ -108,6 +126,7 @@ def settings():
 
 @app.route("/load_matches", methods=["GET"])
 def load_matches():
+    
     return render_template("load_matches.html")
 
 @app.route("/grid_view", methods=["GET"])
