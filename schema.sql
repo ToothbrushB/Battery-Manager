@@ -1,11 +1,24 @@
+-- CREATE TABLE IF NOT EXISTS 'battery' (
+--   'id' INTEGER PRIMARY KEY AUTOINCREMENT,
+--   'status' TEXT NOT NULL,
+--   'cycles' INTEGER NOT NULL,
+--   'date_purchased' DATE NOT NULL,
+--   'goodness' TEXT NOT NULL,
+--   'drainage_curve' TEXT NOT NULL,
+--   'location_id' INTEGER NOT NULL,
+--   FOREIGN KEY('location_id') REFERENCES 'location'('id')
+-- );
+
 CREATE TABLE IF NOT EXISTS 'battery' (
-  'id' INTEGER PRIMARY KEY AUTOINCREMENT,
-  'status' TEXT NOT NULL,
-  'cycles' INTEGER NOT NULL,
-  'date_purchased' DATE NOT NULL,
-  'goodness' TEXT NOT NULL,
-  'drainage_curve' TEXT NOT NULL,
-  'location_id' INTEGER NOT NULL,
+  'id' INTEGER PRIMARY KEY, 
+  'asset_tag' TEXT, 
+  'name' TEXT, 
+  'location_id' INTEGER, 
+  'remote_data' BLOB, 
+  'remote_modified_at' INTEGER,
+  'last_synced_at' INTEGER,
+  'local_modified_at' INTEGER,
+  'sync_status' TEXT,
   FOREIGN KEY('location_id') REFERENCES 'location'('id')
 );
 
@@ -21,9 +34,10 @@ CREATE TABLE IF NOT EXISTS 'history' (
 );
 
 CREATE TABLE IF NOT EXISTS 'location' (
-  'id' INTEGER PRIMARY KEY AUTOINCREMENT,
+  'id' INTEGER PRIMARY KEY,
   'name' TEXT NOT NULL,
   'parent_id' INTEGER,
+  'last_synced_at' INTEGER,
   FOREIGN KEY('parent_id') REFERENCES 'location'('id')
 );
 
@@ -59,7 +73,7 @@ CREATE TABLE IF NOT EXISTS 'events' (
  'id' TEXT PRIMARY KEY,
  'name' TEXT NOT NULL,
  'date' DATE NOT NULL,
- 'event_key' TEXT NOT NULL,
+ 'event_key' TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS 'teams' (

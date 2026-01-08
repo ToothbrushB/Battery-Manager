@@ -8,6 +8,7 @@ Settings
 <div>
     <h1>Settings</h1>
     <form method="post" action="/settings">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         {% for fieldset in config %}
             <fieldset>
                 <legend>{{ fieldset.legend }}</legend>

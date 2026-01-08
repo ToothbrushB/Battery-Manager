@@ -6,7 +6,13 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <p>Network<i data-feather="bar-chart"></i></p>
+                <p>Network<i data-feather="bar-chart"></i><span id="networkStatus"></span></p>
+                <p>Sync Status: <i class="bi"></i><span id="syncStatus"></span></p>
+                <p>Last Sync: <span id="lastSync"></span></p>
+                <button type="button" class="btn btn-primary" id="startSyncButton">
+                    <span class="d-none spinner-border spinner-border-sm" aria-hidden="true"></span>
+                    Start Sync
+                </button>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -26,33 +32,15 @@
                 <div id="reader" width="600px"></div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" onclick="stopReader()">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="syncModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Sync</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <p>Sync Status: {{ status.sync.status }} <i class="bi bi-{{ status.sync.icon }}"></i></p>
-                <p>Last Sync: {{ status.sync.last_sync }}</p>
-                <button type="button" class="btn btn-primary" id="startSyncButton">
-                    <span class="d-none spinner-border spinner-border-sm" aria-hidden="true"></span>
-                    Start Sync
-                </button>
-            </div>
-            <div class="modal-footer">
+                <label for="cameraSelect">Select Camera:</label>
+                <select name="cameraSelect" id="cameraSelect" class="form-select" aria-label="Select camera"></select>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>
 </div>
+
+
 <div class="modal fade" id="batteryModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
         <div class="modal-content">
@@ -61,56 +49,8 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <p>This battery sucks!</p>
-                <table>
-                    <tr>
-                        <td>Tag</td>
-                        <td>000035</td>
-                    </tr>
-                    <tr>
-                        <td>Status</td>
-                        <td>Charging 10hrs</td>
-                    </tr>
-                    <tr>
-                        <td>Resistance</td>
-                        <td>0.020</td>
-                    </tr>
-                    <tr>
-                        <td>Last Tested</td>
-                        <td>2024-06-01 12:34:56</td>
-                    </tr>
-                    <tr>
-                        <td>Cycles</td>
-                        <td>150</td>
-                    </tr>
-                    <tr>
-                        <td>Purchase Date</td>
-                        <td>2023-01-15</td>
-                    </tr>
-                </table>
+                <div class="modal-body-text"></div>
                 <canvas id="batteryModalChart"></canvas>
-                <script>
-                    const ctx = document.getElementById('batteryModalChart');
-
-                    new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Orange'],
-                            datasets: [{
-                                label: '# of Votes',
-                                data: [12, 19, 3, 5, 2, 3],
-                                borderWidth: 1
-                            }]
-                        },
-                        options: {
-                            scales: {
-                                y: {
-                                    beginAtZero: true
-                                }
-                            }
-                        }
-                    });
-                </script>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

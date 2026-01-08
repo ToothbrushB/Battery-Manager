@@ -6,7 +6,7 @@
 
     <meta charset="utf-8">
     <meta name="viewport" content="initial-scale=1, width=device-width">
-
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <link href="{{ url_for('static', filename='node_modules/bootstrap/dist/css/bootstrap.min.css') }}" rel="stylesheet">
     <script src="{{ url_for('static', filename='node_modules/bootstrap/dist/js/bootstrap.bundle.min.js') }}"></script>
 
@@ -20,69 +20,7 @@
     <script src="{{ url_for('static', filename='node_modules/@popperjs/core/dist/umd/popper.min.js') }}"></script>
     <script src="{{ url_for('static', filename='sync.js') }}"></script>
     <script src="{{ url_for('static', filename='node_modules/html5-qrcode/html5-qrcode.min.js') }}"></script>
-    <script src="{{ url_for('static', filename='dist/bundle.js') }}" type="text/javascript"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]')
-            const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl))
-            function onScanSuccess(decodedText, decodedResult) {
-                // handle the scanned code as you like, for example:
-                console.log(`Code matched = ${decodedText}`, decodedResult);
-            }
-
-            function onScanFailure(error) {
-                // handle scan failure, usually better to ignore and keep scanning.
-                // for example:
-                console.warn(`Code scan error = ${error}`);
-            }
-
-            let html5QrcodeScanner = new Html5QrcodeScanner(
-                "reader",
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-        /* verbose= */ false);
-            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
-
-            // This method will trigger user permissions
-            Html5Qrcode.getCameras().then(devices => {
-                /**
-                 * devices would be an array of objects of type:
-                 * { id: "id", label: "label" }
-                 */
-                if (devices && devices.length) {
-                    var cameraId = devices[0].id;
-                    // .. use this to start scanning.
-                }
-            }).catch(err => {
-                // handle err
-            });
-
-
-            const html5QrCode = new Html5Qrcode(/* element id */ "reader");
-            html5QrCode.start(
-                cameraId,
-                {
-                    fps: 10,    // Optional, frame per seconds for qr code scanning
-                    qrbox: { width: 250, height: 250 }  // Optional, if you want bounded box UI
-                },
-                (decodedText, decodedResult) => {
-                    // do something when code is read
-                },
-                (errorMessage) => {
-                    // parse error, ignore it.
-                })
-                .catch((err) => {
-                    // Start failed, handle it.
-                });
-        });
-
-        function stopReader() {
-            html5QrCode.stop().then((ignore) => {
-                // QR Code scanning is stopped.
-            }).catch((err) => {
-                // Stop failed, handle it.
-            });
-        }
-    </script>
+    <script src="{{ url_for('static', filename='qr_reader.js') }}"></script>
     <title>Battery Manager: {% block title %}{% endblock %}</title>
 
 </head>
@@ -120,15 +58,9 @@
             <button class="btn m-2 btn-info" data-bs-toggle="modal" data-bs-target="#readerModal">
                 <i class="bi bi-qr-code-scan"></i> Scan QR
             </button>
-            <button class="btn m-2 {% if status.sync.status == 'Ok' %}btn-success{% else %}btn-danger{% endif %}"
-                data-bs-toggle="modal" data-bs-target="#syncModal" data-bs-toggle="tooltip" data-bs-placement="top"
-                title="Last Sync: {{ status.sync.last_sync }}">
-                {{ status.sync.name }}
-                <span><i class="bi bi-{{ status.sync.icon }}"></i></span>
-            </button>
-            <button class="btn m-2 {% if status.positive %}btn-success{% else %}btn-danger{% endif %}"
-                data-bs-toggle="modal" data-bs-target="#statusModal">{{ status.name }}
-                <span><i class="bi bi-{{ status.icon }}"></i></span>
+            <button class="btn m-2 btn-warning" id="statusButton"
+                data-bs-toggle="modal" data-bs-target="#statusModal">Status Unknown
+                <span><i class="bi bi-question-circle"></i></span>
             </button>
         </div>
     </nav>
@@ -152,8 +84,8 @@
     <main class="container py-5 text-center">
         {% block main %}{% endblock %}
     </main>
-    <footer class="d-flex justify-content-center">© 2025 Breck Robotics. No Rights Reserved.</footer>
-    <script>
+    <footer class="d-flex justify-content-center">© 2026 Breck Robotics. No Rights Reserved.</footer>
+    <script nonce="{{ csp_nonce() }}">
         feather.replace();
     </script>
 </body>
