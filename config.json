@@ -1,0 +1,66 @@
+[
+    {
+        "legend": "Snipe-IT Settings",
+        "settings": [
+            {
+                "id": "snipe-url",
+                "name": "snipe-url",
+                "label": "Snipe-IT URL",
+                "type": "text",
+                "value": "placeholder-url-here"
+            },
+            {
+                "id": "snipe-api-key",
+                "name": "snipe-api-key",
+                "label": "Snipe-IT API Key",
+                "type": "text",
+                "value": "your-api-key-here"
+            }
+        ]
+    },
+    {
+        "legend": "TBA Settings",
+        "settings": [
+            {
+                "id": "tba-url",
+                "name": "tba-url",
+                "label": "TBA URL",
+                "type": "text",
+                "value": "placeholder-url-here"
+            },
+            {
+                "id": "tba-api-key",
+                "name": "tba-api-key",
+                "label": "TBA API Key",
+                "type": "text",
+                "value": "your-api-key-here"
+            },
+            {
+                "id": "tba-event-key",
+                "name": "tba-event-key",
+                "label": "TBA Event Key",
+                "type": "text",
+                "value": "your-event-key-here"
+            },
+            {
+                "id": "tba-team-key",
+                "name": "tba-team-key",
+                "label": "TBA Team Key",
+                "type": "text",
+                "value": "your-team-key-here"
+            }
+        ]
+    },
+    {
+        "legend": "Configuration Settings",
+        "settings": [
+            {
+                "id": "battery-model-id",
+                "name": "battery-model-id",
+                "label": "Battery Model ID",
+                "type": "number",
+                "value": 1
+            }
+        ]
+    }
+]

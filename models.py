@@ -1,21 +1,37 @@
 from __future__ import annotations
+from datetime import datetime
+import enum
 from typing import Optional, Generic, TypeVar
-
-from helpers import *
 import msgspec
+from typing import List
+from typing import Optional
+from sqlalchemy import ForeignKey
+from sqlalchemy import String
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import Mapped
+from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import relationship
 
-T = TypeVar('T')
-class Paginated(msgspec.Struct, Generic[T]):
+T = TypeVar("T")
+
+
+class Paginated(msgspec.Struct, Generic[T]):  # copied from msgspec docs
     """A generic paginated API wrapper, parametrized by the item type."""
-    total: int       # The total number of items found
-    rows: list[T]   # Items returned, up to `per_page` in length
-    
+
+    total: int  # The total number of items found
+    rows: list[T]  # Items returned, up to `per_page` in length
+
+
 class DateTime(msgspec.Struct):
     datetime: str
     formatted: str
+
+
 class Date(msgspec.Struct):
     date: str
     formatted: str
+
+
 # class AvailableActions(msgspec.Struct):
 #     update: bool
 #     delete: bool
@@ -26,10 +42,14 @@ class Company(msgspec.Struct):
     id: int
     name: str
     tag_color: Optional[str] = None
+
+
 class Department(msgspec.Struct):
     id: int
     name: str
     tag_color: Optional[str] = None
+
+
 class User(msgspec.Struct):
     id: int
     name: str
@@ -77,8 +97,8 @@ class User(msgspec.Struct):
     last_login: Optional[DateTime] = None
     deleted_at: Optional[DateTime] = None
     groups: Optional[list[str]] = None
-    
-    
+
+
 class Location(msgspec.Struct):
     id: int
     name: str
@@ -107,54 +127,105 @@ class Location(msgspec.Struct):
     updated_at: Optional[DateTime] = None
     parent: Optional[Location] = None
     manager: Optional[User] = None
-    
+    allowed: Optional[bool] = None
+
+
 class Model(msgspec.Struct):
     id: int
     name: str
-class StatusLabel(msgspec.Struct):
+
+
+class StatusLabelAsset(msgspec.Struct):
     id: int
     name: str
     status_type: str
     status_meta: str
+
+
 class Category(msgspec.Struct):
     id: int
     name: str
     tag_color: Optional[str] = None
+
+
 class Manufacturer(msgspec.Struct):
     id: int
     name: str
     tag_color: Optional[str] = None
+
+
 class Supplier(msgspec.Struct):
     id: int
     name: str
     tag_color: Optional[str] = None
+
+
 class Depreciation(msgspec.Struct):
     id: int
     name: str
     months: int
     type: str
     minimum: Optional[float] = None
-    
+
+
 class Company(msgspec.Struct):
     id: int
     name: str
     tag_color: Optional[str] = None
-    
+
+
 class Assignee(msgspec.Struct):
     id: int
     name: str
     type: str
-    
+
+
 class CustomField(msgspec.Struct):
+    id: int
+    name: str
+    db_column_name: str
+    format: Optional[str] = None
+    field_values: Optional[str] = None
+    field_values_array: Optional[list[str]] = None
+    type: Optional[str] = None
+    required: Optional[bool] = None
+    display_in_user_view: Optional[bool] = None
+    auto_add_to_fieldsets: Optional[bool] = None
+    show_in_listview: Optional[bool] = None
+    display_checkin: Optional[bool] = None
+    display_audit: Optional[bool] = None
+    created_at: Optional[DateTime] = None
+    updated_at: Optional[DateTime] = None
+    config: Optional[CustomFieldConfig] = None
+
+
+class CustomFieldAsset(msgspec.Struct):
     field: str
     value: Optional[str] = None
     field_format: Optional[str] = None
     element: Optional[str] = None
+
+
+class StatusLabel(msgspec.Struct):
+    id: int
+    name: str
+    type: str
+    color: Optional[str] = None
+    show_in_nav: Optional[bool] = None
+    default_label: Optional[bool] = None
+    assets_counts: Optional[int] = None
+    notes: Optional[str] = None
+    created_by: Optional[User] = None
+    created_at: Optional[DateTime] = None
+    updated_at: Optional[DateTime] = None
+    allowed: Optional[bool] = None
+
+
 class Asset(msgspec.Struct):
     id: int
     name: str
     asset_tag: str
-    status_label: StatusLabel
+    status_label: StatusLabelAsset
     category: Category
     model: Model
     company: Optional[Company] = None
@@ -187,29 +258,67 @@ class Asset(msgspec.Struct):
     last_checkin: Optional[DateTime] = None
     expected_checkin: Optional[Date] = None
     purchase_cost: Optional[float] = None
-    custom_fields: Optional[dict[str, CustomField]] = None
-    
-    
-from typing import List
-from typing import Optional
-from sqlalchemy import ForeignKey
-from sqlalchemy import String
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.orm import Mapped
-from sqlalchemy.orm import mapped_column
-from sqlalchemy.orm import relationship
+    custom_fields: Optional[dict[str, CustomFieldAsset]] = None
+
 
 class Base(DeclarativeBase):
     pass
+
 
 class LocationDb(Base):
     __tablename__ = "location"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[Optional[str]]
+    allowed: Mapped[Optional[bool]] = mapped_column(default=False)
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("location.id"))
+    is_parent: Mapped[bool] = mapped_column(default=False)
+    remote_data: Mapped[Optional[bytes]]
     last_synced_at: Mapped[Optional[str]]
+
     def __repr__(self) -> str:
         return f"Address(id={self.id!r}, email_address={self.email_address!r})"
+
+    @classmethod
+    def fromLocation(cls, location: Location) -> LocationDb:
+        return cls(
+            id=location.id,
+            name=location.name,
+            parent_id=location.parent.id if location.parent else None,
+            is_parent=True if location.children else False,
+            remote_data=msgspec.msgpack.encode(location),
+            last_synced_at=datetime.now().timestamp(),
+        )
+
+
+class CustomFieldConfig(enum.Enum):
+    HIDE = "hide"
+    DISPLAY = "display"
+    EDIT = "edit"
+
+
+class CustomFieldDb(Base):
+    __tablename__ = "custom_field"
+    db_column_name: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[Optional[str]]
+    config: Mapped[CustomFieldConfig] = mapped_column(
+        String, default=CustomFieldConfig.HIDE.value
+    )
+    remote_data: Mapped[Optional[bytes]]
+    last_synced_at: Mapped[Optional[str]]
+
+    def __repr__(self) -> str:
+        return (
+            f"CustomField(db_column_name={self.db_column_name!r}, name={self.name!r})"
+        )
+
+    @classmethod
+    def fromCustomField(cls, field: CustomField) -> CustomFieldDb:
+        return cls(
+            db_column_name=field.db_column_name,
+            name=field.name,
+            remote_data=msgspec.msgpack.encode(field),
+            last_synced_at=datetime.now().timestamp(),
+        )
 
 
 class BatteryDb(Base):
@@ -223,8 +332,54 @@ class BatteryDb(Base):
     last_synced_at: Mapped[Optional[str]]
     local_modified_at: Mapped[Optional[str]]
     sync_status: Mapped[Optional[str]]
+
+    @classmethod
+    def fromAsset(cls, asset: Asset) -> BatteryDb:
+        return cls(
+            id=asset.id,
+            asset_tag=asset.asset_tag,
+            name=asset.name,
+            location_id=asset.location.id if asset.location else None,
+            remote_data=msgspec.msgpack.encode(
+                asset
+            ),  # store the full asset data as msgpack
+            remote_modified_at=datetime.strptime(
+                asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S"
+            ).timestamp(),
+            last_synced_at=datetime.now().timestamp(),
+            local_modified_at=None,
+            sync_status="new",
+        )
+
     def __repr__(self) -> str:
-        return f"Battery(id={self.id!r}, asset_tag={self.asset_tag!r}, name={self.name!r})"
+        return (
+            f"Battery(id={self.id!r}, asset_tag={self.asset_tag!r}, name={self.name!r})"
+        )
+
+
+class StatusLabelDb(Base):
+    __tablename__ = "status_label"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[Optional[str]]
+    type: Mapped[Optional[str]]
+    allowed: Mapped[Optional[bool]] = mapped_column(default=False)
+    remote_data: Mapped[Optional[bytes]]
+    last_synced_at: Mapped[Optional[str]]
+
+    def __repr__(self) -> str:
+        return f"StatusLabel(id={self.id!r}, name={self.name!r}, type={self.type!r})"
+
+    @classmethod
+    def fromStatusLabel(cls, label: StatusLabel) -> StatusLabelDb:
+        return cls(
+            id=label.id,
+            name=label.name,
+            type=label.type,
+            allowed=label.allowed if label.allowed is not None else False,
+            remote_data=msgspec.msgpack.encode(label),
+            last_synced_at=datetime.now().timestamp(),
+        )
+
 
 class BatteryView(msgspec.Struct):
     id: int
@@ -235,15 +390,19 @@ class BatteryView(msgspec.Struct):
     notes: Optional[str]
     purchased_date: Optional[str]
     custom_fields: Optional[dict[str, CustomField]]
-    
+
     remote_modified_at: Optional[str]
     last_synced_at: Optional[str]
     local_modified_at: Optional[str]
     sync_status: Optional[str]
-    
+
     @classmethod
     def from_battery_db(cls, battery: BatteryDb) -> BatteryView:
-        asset = msgspec.msgpack.decode(battery.remote_data, type=Asset) if battery.remote_data else None
+        asset = (
+            msgspec.msgpack.decode(battery.remote_data, type=Asset)
+            if battery.remote_data
+            else None
+        )
         return cls(
             id=battery.id,
             asset_tag=battery.asset_tag,

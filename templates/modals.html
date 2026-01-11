@@ -49,7 +49,46 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <div class="modal-body-text"></div>
+                <div id="batteryModalAlerts"></div>
+                <div class="modal-body-text">
+                    <table>
+                        <tr>
+                            <td>Tag</td>
+                            <td id="batteryModalAssetTag">Loading...</td>
+                        </tr>
+                        <tr>
+                            <td>Status</td>
+                            <td id="batteryModalStatus">Loading...</td>
+                        </tr>
+                        <tr>
+                            <td>Purchase Date</td>
+                            <td id="batteryModalPurchaseDate">Loading...</td> <!-- TODO using Intl.RelativeTimeFormat -->
+                        </tr>
+                    </table>
+                    <table id="batteryModalCustomFields">
+
+                    </table>
+                    <form id="batteryUpdateForm">
+                        <label for="batteryStatusSelect" class="form-label mt-3">Update Battery Status</label>
+                        <select class="form-select" aria-label="Update Battery Status" id="batteryStatusSelect"
+                            name="batteryStatusSelect">
+                            <option selected>Loading...</option>
+                        </select>
+                        <label for="batteryNotes" class="form-label mt-3">Notes</label>
+                        <textarea class="form-control" id="batteryNotes" name="batteryNotes" rows="3"></textarea>
+                        <label for="batteryLocationSelect" class="form-label mt-3">Location</label>
+                        <select class="form-select" aria-label="Battery Location" id="batteryLocationSelect"
+                            name="batteryLocation">
+                            <option selected>Loading...</option>
+                        </select>
+                        <label for="batteryUsageTypeSelect" class="form-label mt-3">Usage Type</label>
+                        <select class="form-select" aria-label="Battery Usage Type" id="batteryUsageTypeSelect"
+                            name="batteryUsageType">
+                            <option selected>Loading...</option>
+                        </select>
+                        <button type="submit" class="btn btn-primary mt-3">Update</button>
+                    </form>
+                </div>
                 <canvas id="batteryModalChart"></canvas>
             </div>
             <div class="modal-footer">

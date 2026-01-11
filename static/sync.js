@@ -81,56 +81,42 @@ function getBatteryAlerts(battery) {
 // create battery info modal
 function showBatteryInfoModal(batteryId) {
     const modalBody = document.querySelector('#batteryModal .modal-body-text');
-    modalBody.innerHTML = 'Loading...';
     fetch(`/api/battery/${batteryId}`).then(response => response.json()).then(data => {
-        modalBody.innerHTML = getBatteryAlerts(data).join('\n') + `
-                <table>
-                    <tr>
-                        <td>Tag</td>
-                        <td>${data.asset_tag}</td>
-                    </tr>
-                    <tr>
-                        <td>Status</td>
-                        <td>${data.status_label.name}</td>
-                    </tr>
-                    <tr>
-                        <td>Resistance</td>
-                        <td>SOmething something something</td>
-                    </tr>
-                    <tr>
-                        <td>Last Tested</td>
-                        <td>2024-06-01 12:34:56</td>
-                    </tr>
-                    <tr>
-                        <td>Cycles</td>
-                        <td>150</td>
-                    </tr>
-                    <tr>
-                        <td>Purchase Date</td>
-                        <td>${data.purchased_date}</td> // TODO using Intl.RelativeTimeFormat
-                    </tr>
-                </table>
-            <form>
-                <label for="batteryStatusSelect" class="form-label mt-3">Update Battery Status</label>
-                <select class="form-select mt-3" aria-label="Update Battery Status" id="batteryStatusSelect" name="batteryStatusSelect">
-                    <option selected>Select status</option>
-                    <!-- Populate options with possible statuses loaded dynamically -->
-                </select>
-                <label for="batteryNotes" class="form-label mt-3">Notes</label>
-                <textarea class="form-control" id="batteryNotes" name="batteryNotes" rows="3"></textarea>
-                <label for="batteryLocation" class="form-label mt-3">Location</label>
-                <select class="form-select mt-3" aria-label="Battery Location" id="batteryLocation" name="batteryLocation">
-                    <option selected>Select location</option>
-                    <!-- Populate options with possible locations loaded dynamically -->
-                </select>
-                <label for="batteryUsageType" class="form-label mt-3">Usage Type</label>
-                <select class="form-select mt-3" aria-label="Battery Usage Type" id="batteryUsageType" name="batteryUsageType">
-                    <option selected>Select usage type</option>
-                    <!-- Populate options with possible usage types loaded dynamically -->
-                </select>
-                <button type="submit" class="btn btn-primary mt-3">Update</button>
-            </form>
-                `
+        document.getElementById("batteryModalAlerts").innerHTML = getBatteryAlerts(data).join('\n');
+        document.getElementById('batteryModalAssetTag').innerText = data.asset_tag || 'N/A';
+        document.getElementById('batteryModalStatus').innerText = data.status_label.name;
+        document.getElementById('batteryModalPurchaseDate').innerText = data.purchased_date || 'N/A';
+
+        document.getElementById('batteryModalCustomFields').innerHTML = '';
+        console.log(data)
+        for (const [name, field] of Object.entries(data.custom_fields)) { // convert object to iterable with array destructuring 
+            const row = document.createElement('tr');
+            const fieldCell = document.createElement('td');
+            const valueCell = document.createElement('td');
+            fieldCell.innerText = name;
+            if (field.config === "display") {
+                valueCell.innerText = field.value;
+            } else if (field.config === "edit") {
+                switch (field.type) { // create input based on type: text, number, select
+                }
+            } else {
+                continue;
+            }
+            row.appendChild(fieldCell);
+            row.appendChild(valueCell);
+            document.getElementById('batteryModalCustomFields').appendChild(row);
+        }
+
+    });
+    fetch('/api/locations').then(response => response.json()).then(locationsData => {
+        const locationSelect = document.getElementById('batteryLocationSelect');
+        locationSelect.innerHTML = ''; // clear existing options
+        locationsData.forEach(location => {
+            const option = document.createElement('option'); // create option element
+            option.value = location.id;
+            option.text = location.name;
+            locationSelect.appendChild(option);
+        })
     });
 
     let chartCanvas = document.getElementById('batteryModalChart');
@@ -156,6 +142,9 @@ function showBatteryInfoModal(batteryId) {
     document.getElementById('batteryModal').addEventListener('hidden.bs.modal', function (event) {
         chart.destroy();
     }, { once: true });
+    document.querySelector('#batteryUpdateForm > button[type="submit"]').onclick = function (e) {
+        e.preventDefault();
+    }
 }
 
 

@@ -10,49 +10,116 @@ Settings
     <form method="post" action="/settings">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         {% for fieldset in config %}
-            <fieldset>
-                <legend>{{ fieldset.legend }}</legend>
-                {% for setting in fieldset.settings %}
-                    <div class="mb-3">
-                        {% if setting.type == "text" %}
-                        <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
-                        <input type="text" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value | e }}">
-                        {% elif setting.type == "checkbox" %}
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" id="{{ setting.id }}" name="{{ setting.name }}" {% if setting.value %}checked{% endif %}>
-                            <label class="form-check-label" for="{{ setting.id }}">{{ setting.label }}</label>
-                        </div>
-                        {% elif setting.type == "select" %}
-                        <select class="form-select" id="{{ setting.id }}" name="{{ setting.name }}">
-                            {% for option in setting.options %}
-                            <option value="{{ option.value | e }}" {% if option.value == setting.value %}selected{% endif %}>{{ option.label }}</option>
+        <fieldset>
+            <legend>{{ fieldset.legend }}</legend>
+            {% for setting in fieldset.settings %}
+            <div class="mb-3">
+                {% if setting.type == "text" %}
+                <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
+                <input type="text" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}"
+                    value="{{ setting.value | e }}">
+                {% elif setting.type == "checkbox" %}
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="{{ setting.id }}" name="{{ setting.name }}" {%
+                        if setting.value %}checked{% endif %}>
+                    <label class="form-check-label" for="{{ setting.id }}">{{ setting.label }}</label>
+                </div>
+                {% elif setting.type == "select" %}
+                <select class="form-select" id="{{ setting.id }}" name="{{ setting.name }}">
+                    {% for option in setting.options %}
+                    <option value="{{ option.value | e }}" {% if option.value==setting.value %}selected{% endif %}>{{
+                        option.label }}</option>
+                    {% endfor %}
+                </select>
+                {% elif setting.type == "number" %}
+                <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
+                <input type="number" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}"
+                    value="{{ setting.value | e }}">
+                {% elif setting.type == "textarea" %}
+                <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
+                <textarea class="form-control" id="{{ setting.id }}"
+                    name="{{ setting.name }}">{{ setting.value | e }}</textarea>
+                {% elif setting.type == "radio" %}
+                <label class="form-label">{{ setting.label }}</label>
+                <div>
+                    {% for option in setting.options %}
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="{{ setting.name }}" id="{{ option.id }}"
+                            value="{{ option.value }}" {% if option.value==setting.value %}checked{% endif %}>
+                        <label class="form-check-label" for="{{ option.id }}">
+                            {{ option.label | e }}
+                        </label>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </fieldset>
+        {% endfor %}
+        <fieldset>
+            <legend>Field Configuration (Connect to Snipe IT first)</legend>
+            <table>
+                <thead>
+                    <th>Field Name</th>
+                    <th>Field Use</th>
+                </thead>
+                {% for field in custom_fields %}
+                <tr>
+                    <td>{{ field.name | e }}</td>
+                    <td>
+                        <select class="form-select" name="field_{{ field.db_column_name }}">
+                            <option value="hide" {% if field.config=="hide" %}selected{% endif %}>Hide</option>
+                            <option value="display" {% if field.config=="display" %}selected{% endif %}>Display</option>
+                            <option value="edit" {% if field.config=="edit" %}selected{% endif %}>Display and edit
+                            </option>
+                        </select>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </fieldset>
+        <fieldset>
+            <legend>Location Configuration</legend>
+            <label for="allowed_locations" class="form-label">Allowed Parent Locations</label>
+            <select name="allowed_locations" id="allowed_locations" multiple class="form-select">
+                {% for location in locations %}
+                <option value="{{ location.id }}" {% if location.allowed %}selected{% endif %}>{{ location.name | e }}
+                </option>
+                {% endfor %}
+            </select>
+        </fieldset>
+        <fieldset>
+            <legend>Status Configuration</legend>
+            <label for="allowed_statuses" class="form-label">Allowed Statuses</label>
+            <select name="allowed_statuses" id="allowed_statuses" multiple class="form-select">
+                {% for status in statuses %}
+                <option value="{{ status.id }}" {% if status.allowed %}selected{% endif %}>{{ status.name | e }}
+                </option>
+                {% endfor %}
+            </select>
+        </fieldset>
+        <fieldset>
+            <legend>Special Fields</legend>
+            <table>
+                <thead>
+                    <th>Property</th>
+                    <th>Field Mapping</th>
+                </thead>
+                <tr>
+                    <td>Battery Usage Type</td>
+                    <td>
+                        <select class="form-select" name="special_battery_usage_type">
+                            {% for field in custom_fields %}
+                            <option value="{{ field.db_field_name }}" {% if mapping==field.db_field_name %}selected{%
+                                endif %}>{{ field.name | e }}</option>
                             {% endfor %}
                         </select>
-                        {% elif setting.type == "number" %}
-                        <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
-                        <input type="number" class="form-control" id="{{ setting.id }}" name="{{ setting.name }}" value="{{ setting.value | e }}">
-                        {% elif setting.type == "textarea" %}
-                        <label for="{{ setting.id }}" class="form-label">{{ setting.label }}</label>
-                        <textarea class="form-control" id="{{ setting.id }}" name="{{ setting.name }}">{{ setting.value | e }}</textarea>
-                        {% elif setting.type == "radio" %}
-                        <label class="form-label">{{ setting.label }}</label>
-                        <div>
-                            {% for option in setting.options %}
-                            <div class="form-check">
-                                <input class="form-check-input" type="radio" name="{{ setting.name }}" id="{{ option.id }}" value="{{ option.value }}" {% if option.value == setting.value %}checked{% endif %}>
-                                <label class="form-check-label" for="{{ option.id }}">
-                                    {{ option.label | e }}
-                                </label>
-                            </div>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                    </div>
+                    </td>
+                </tr>
                 {% endfor %}
-            </fieldset>
-        {% endfor %}
+            </table>
         </fieldset>
-        
         <button type="submit" class="btn btn-primary">Save Settings</button>
     </form>
 </div>
