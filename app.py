@@ -55,6 +55,18 @@ config = json.load(open("config.json"))
 
 
 def load_settings():
+    with sqlalchemy.orm.Session(engine) as session:
+        existing_mappings = session.query(FieldMappingDb).all()
+        if len(existing_mappings) == 0:
+            session.add(FieldMappingDb(
+                name="Battery Usage Type",
+                db_column_name="",
+            ))
+            session.add(FieldMappingDb(
+                name="Battery Voltage Curve",
+                db_column_name="",
+            ))
+        session.commit()
     for section in config:
         for setting in section["settings"]:
             setting["value"] = os.getenv(setting["id"].upper().replace("-", "_"))
@@ -97,6 +109,8 @@ def settings():
         existing_locations = (
             sql_session.query(LocationDb).where(LocationDb.is_parent == True).all()
         )
+        existing_statuses = sql_session.query(StatusLabelDb).all()
+        existing_mappings = sql_session.query(FieldMappingDb).all()
         if request.method == "POST":
             for section in config:
                 for setting in section["settings"]:
@@ -114,9 +128,17 @@ def settings():
                 if new_config and new_config != field.config:
                     field.config = new_config
             for location in existing_locations:
-                allowed = f"location_{location.id}" in request.form
+                allowed = f"{location.id}" in request.form.getlist('allowed_locations')
                 if allowed != location.allowed:
                     location.allowed = allowed
+            for status in existing_statuses:
+                allowed = f"{status.id}" in request.form.getlist('allowed_statuses')
+                if allowed != status.allowed:
+                    status.allowed = allowed
+            for mapping in existing_mappings:
+                column = request.form.get(f"special_{mapping.id}")
+                if column and column != mapping.db_column_name:
+                    mapping.db_column_name = column
             sql_session.commit()
             flash("Settings updated successfully!", "success")
             return redirect("/settings")
@@ -126,6 +148,8 @@ def settings():
                 config=config,
                 custom_fields=existing_fields,
                 locations=existing_locations,
+                statuses=existing_statuses,
+                mappings=existing_mappings,
             )
 
 
@@ -190,3 +214,5 @@ def logout():
 
     # Redirect user to login form
     return redirect("/")
+
+

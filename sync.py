@@ -25,16 +25,18 @@ def download_hardware_changes():
     with Session(engine) as session:
         for asset in assets: # add all batteries to the db
             existing = session.get(BatteryDb, asset.id)
-            
             if existing is None: # new battery
-                session.add(BatteryDb.fromAsset(asset))
+                obj = BatteryDb.fromAsset(asset)
+                obj.sync_status = "new"
+                session.add(obj)
             else: # existing battery, update with latest change
-                if (existing.local_modified_at if existing.local_modified_at is not None else 0) > datetime.strptime(asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S").timestamp():
+                # if (existing.local_modified_at if existing.local_modified_at is not None else 0) > datetime.strptime(asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S").timestamp():
                     
-                    # need to sync the other way
-                    continue
-                existing = BatteryDb.fromAsset(asset)
+                #     # need to sync the other way
+                #     continue
+                existing = BatteryDb.fromAsset(asset, existing)
                 existing.sync_status = "remote_updated"
+                existing.local_modified_at = None
         session.commit()
     
         for field in field_data.rows: 
@@ -42,7 +44,8 @@ def download_hardware_changes():
             if existing is None: # new field
                 session.add(CustomFieldDb.fromCustomField(field))
             else: # existing field, update with latest change
-                existing = CustomFieldDb.fromCustomField(field)
+                field.config = existing.config # preserve local config
+                existing = CustomFieldDb.fromCustomField(field, existing)
                 existing.sync_status = "remote_updated"
         session.commit()
         
@@ -52,7 +55,8 @@ def download_hardware_changes():
             if existing is None: # new location
                 session.add(LocationDb.fromLocation(location))
             else: # existing location, update with latest change
-                existing = LocationDb.fromLocation(location)
+                location.allowed = existing.allowed
+                existing = LocationDb.fromLocation(location, existing)
         session.commit()
         
         for status_label in status_labels:
@@ -60,7 +64,7 @@ def download_hardware_changes():
             if existing is None: # new status label
                 session.add(StatusLabelDb.fromStatusLabel(status_label))
             else: # existing status label, update with latest change
-                existing = StatusLabelDb.fromStatusLabel(status_label)
+                existing = StatusLabelDb.fromStatusLabel(status_label, existing)
         session.commit()
         
 

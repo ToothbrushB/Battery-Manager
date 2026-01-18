@@ -106,13 +106,13 @@ Settings
                     <th>Property</th>
                     <th>Field Mapping</th>
                 </thead>
+                {% for mapping in mappings %}
                 <tr>
-                    <td>Battery Usage Type</td>
+                    <td>{{ mapping.name | e }}</td>
                     <td>
-                        <select class="form-select" name="special_battery_usage_type">
+                        <select class="form-select" name="special_{{ mapping.id }}">
                             {% for field in custom_fields %}
-                            <option value="{{ field.db_field_name }}" {% if mapping==field.db_field_name %}selected{%
-                                endif %}>{{ field.name | e }}</option>
+                            <option value="{{ field.db_column_name }}" {% if mapping.db_column_name==field.db_column_name %}selected{% endif %}>{{ field.name | e }}</option>
                             {% endfor %}
                         </select>
                     </td>

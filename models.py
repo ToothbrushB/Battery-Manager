@@ -101,7 +101,7 @@ class User(msgspec.Struct):
 
 class Location(msgspec.Struct):
     id: int
-    name: str
+    name: Optional[str] = None
     children: Optional[list[Location]] = None
     image: Optional[str] = None
     address: Optional[str] = None
@@ -137,9 +137,9 @@ class Model(msgspec.Struct):
 
 class StatusLabelAsset(msgspec.Struct):
     id: int
-    name: str
-    status_type: str
-    status_meta: str
+    name: Optional[str] = None
+    status_type: Optional[str] = None
+    status_meta: Optional[str] = None
 
 
 class Category(msgspec.Struct):
@@ -204,6 +204,7 @@ class CustomFieldAsset(msgspec.Struct):
     value: Optional[str] = None
     field_format: Optional[str] = None
     element: Optional[str] = None
+    custom_field: Optional[CustomField] = None
 
 
 class StatusLabel(msgspec.Struct):
@@ -279,17 +280,15 @@ class LocationDb(Base):
         return f"Address(id={self.id!r}, email_address={self.email_address!r})"
 
     @classmethod
-    def fromLocation(cls, location: Location) -> LocationDb:
-        return cls(
-            id=location.id,
-            name=location.name,
-            parent_id=location.parent.id if location.parent else None,
-            is_parent=True if location.children else False,
-            remote_data=msgspec.msgpack.encode(location),
-            last_synced_at=datetime.now().timestamp(),
-        )
-
-
+    def fromLocation(cls, location: Location, existing: LocationDb = None) -> LocationDb:
+        obj = existing if existing else cls()
+        obj.id = location.id
+        obj.name = location.name
+        obj.parent_id = location.parent.id if location.parent else None
+        obj.is_parent = True if location.children else False
+        obj.remote_data = msgspec.msgpack.encode(location)
+        obj.last_synced_at = datetime.now().timestamp()
+        return obj
 class CustomFieldConfig(enum.Enum):
     HIDE = "hide"
     DISPLAY = "display"
@@ -311,14 +310,21 @@ class CustomFieldDb(Base):
             f"CustomField(db_column_name={self.db_column_name!r}, name={self.name!r})"
         )
 
+    def toCustomField(self) -> CustomField:
+        field = msgspec.msgpack.decode(self.remote_data, type=CustomField)
+        field.config = CustomFieldConfig(self.config)
+        return field
+    
     @classmethod
-    def fromCustomField(cls, field: CustomField) -> CustomFieldDb:
-        return cls(
-            db_column_name=field.db_column_name,
-            name=field.name,
-            remote_data=msgspec.msgpack.encode(field),
-            last_synced_at=datetime.now().timestamp(),
-        )
+    def fromCustomField(cls, field: CustomField, existing: CustomFieldDb = None) -> CustomFieldDb:
+        obj = existing if existing else cls()
+        obj.db_column_name = field.db_column_name
+        obj.name = field.name
+        obj.remote_data = msgspec.msgpack.encode(field)
+        obj.last_synced_at = datetime.now().timestamp()
+        return obj
+        
+
 
 
 class BatteryDb(Base):
@@ -334,22 +340,18 @@ class BatteryDb(Base):
     sync_status: Mapped[Optional[str]]
 
     @classmethod
-    def fromAsset(cls, asset: Asset) -> BatteryDb:
-        return cls(
-            id=asset.id,
-            asset_tag=asset.asset_tag,
-            name=asset.name,
-            location_id=asset.location.id if asset.location else None,
-            remote_data=msgspec.msgpack.encode(
-                asset
-            ),  # store the full asset data as msgpack
-            remote_modified_at=datetime.strptime(
-                asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S"
-            ).timestamp(),
-            last_synced_at=datetime.now().timestamp(),
-            local_modified_at=None,
-            sync_status="new",
-        )
+    def fromAsset(cls, asset: Asset, existing: BatteryDb = None) -> BatteryDb:
+        obj = existing if existing else cls()
+        obj.id = asset.id
+        obj.asset_tag = asset.asset_tag
+        obj.name = asset.name
+        obj.location_id = asset.location.id if asset.location else None
+        obj.remote_data = msgspec.msgpack.encode(asset)
+        obj.remote_modified_at = datetime.strptime(
+            asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S"
+        ).timestamp()
+        obj.last_synced_at = datetime.now().timestamp()
+        return obj
 
     def __repr__(self) -> str:
         return (
@@ -370,16 +372,23 @@ class StatusLabelDb(Base):
         return f"StatusLabel(id={self.id!r}, name={self.name!r}, type={self.type!r})"
 
     @classmethod
-    def fromStatusLabel(cls, label: StatusLabel) -> StatusLabelDb:
-        return cls(
-            id=label.id,
-            name=label.name,
-            type=label.type,
-            allowed=label.allowed if label.allowed is not None else False,
-            remote_data=msgspec.msgpack.encode(label),
-            last_synced_at=datetime.now().timestamp(),
-        )
+    def fromStatusLabel(cls, label: StatusLabel, existing: StatusLabelDb = None) -> StatusLabelDb:
+        obj = existing if existing else cls()
+        obj.id = label.id
+        obj.name = label.name
+        obj.type = label.type
+        obj.remote_data = msgspec.msgpack.encode(label)
+        obj.last_synced_at = datetime.now().timestamp()
+        return obj
 
+class FieldMappingDb(Base):
+    __tablename__ = "field_mapping"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str]
+    db_column_name: Mapped[str]
+
+    def __repr__(self) -> str:
+        return f"FieldMapping(id={self.id!r}, field_name={self.name!r}, db_column_name={self.db_column_name!r})"
 
 class BatteryView(msgspec.Struct):
     id: int
@@ -389,7 +398,7 @@ class BatteryView(msgspec.Struct):
     status_label: Optional[StatusLabel]
     notes: Optional[str]
     purchased_date: Optional[str]
-    custom_fields: Optional[dict[str, CustomField]]
+    custom_fields: Optional[dict[str, CustomFieldAsset]]
 
     remote_modified_at: Optional[str]
     last_synced_at: Optional[str]
@@ -417,3 +426,11 @@ class BatteryView(msgspec.Struct):
             custom_fields=asset.custom_fields if asset else None,
             purchased_date=asset.purchased_date if asset else None,
         )
+
+class KVStoreDb(Base):
+    __tablename__ = "kv_store"
+    key: Mapped[str] = mapped_column(primary_key=True)
+    value: Mapped[Optional[str]]
+
+    def __repr__(self) -> str:
+        return f"KVS(key={self.key!r}, value={self.value!r})"

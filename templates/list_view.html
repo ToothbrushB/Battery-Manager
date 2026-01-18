@@ -21,6 +21,8 @@ List View
                 <td>{{ battery.name | e }}</td>
                 <td>{{ battery.status_label.name | e}}</td>
                 <td>{{ battery.location.name | e }}</td>
+                <td><button class="btn btn-primary batteryModalButton" data-bs-toggle="modal" data-bs-target="#batteryModal"
+                    data-battery-id="{{ battery.id }}">View</button></td>
             </tr>
             {% endfor %}
         </tbody>

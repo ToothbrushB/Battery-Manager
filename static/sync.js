@@ -16,7 +16,13 @@ function periodic() {
         .then(data => {
             statusButton.className = `btn m-2 ${data.status.name === 'Operational' ? 'btn-success' : 'btn-danger'}`;
             statusButton.innerHTML = `${data.status.name} <span><i class="bi bi-${data.status.icon}"></i></span>`;
-            document.querySelector('#statusModal .modal-body #networkStatus').innerText = data.status.network.status;
+            document.querySelector('#statusModal .modal-body #networkStatus').innerHTML = `
+            ${data.status.network.status}
+            <ul>
+                <li>IP Address: ${data.status.network.ip_address.join(", ") || 'N/A'}</li>
+                <li>Ping RTT: ${data.status.network.ping + ' ms'}</li>
+            </ul>
+            `
             document.querySelector('#statusModal .modal-body #syncStatus').innerText = data.status.sync.status;
             document.querySelector('#statusModal .modal-body #syncStatus').className = `bi bi-${data.status.sync.icon}`;
             document.querySelector('#statusModal .modal-body #lastSync').innerText = data.status.sync.last_sync;
@@ -28,13 +34,13 @@ function periodic() {
 }
 
 
-function showToast(message, subject, type = 'info') {
+function showToast(message, subject, type = 'info', timeout = 5000) {
     const toastContainer = document.querySelector('.toast-container') || createToastContainer();
 
     const toast = document.createElement('div');
     toast.className = 'toast show';
     toast.setAttribute('role', 'alert');
-    toast.setAttribute('aria-live', 'assertive');
+    toast.setAttribute('aria-live', 'assertive'); // for screen readers
     toast.setAttribute('aria-atomic', 'true');
 
     const bgColor = type === 'success' ? 'bg-success' : type === 'error' ? 'bg-danger' : 'bg-info';
@@ -51,10 +57,11 @@ function showToast(message, subject, type = 'info') {
 
     toastContainer.appendChild(toast);
 
-    // Auto-dismiss after 5 seconds
+    // Auto-dismiss after specified timeout
     setTimeout(() => {
         toast.remove();
-    }, 5000);
+    }, timeout);
+    return toast;
 }
 
 function createToastContainer() {
@@ -81,10 +88,11 @@ function getBatteryAlerts(battery) {
 // create battery info modal
 function showBatteryInfoModal(batteryId) {
     const modalBody = document.querySelector('#batteryModal .modal-body-text');
+    let chartConfig = {};
+    let chart;
     fetch(`/api/battery/${batteryId}`).then(response => response.json()).then(data => {
         document.getElementById("batteryModalAlerts").innerHTML = getBatteryAlerts(data).join('\n');
         document.getElementById('batteryModalAssetTag').innerText = data.asset_tag || 'N/A';
-        document.getElementById('batteryModalStatus').innerText = data.status_label.name;
         document.getElementById('batteryModalPurchaseDate').innerText = data.purchased_date || 'N/A';
 
         document.getElementById('batteryModalCustomFields').innerHTML = '';
@@ -94,10 +102,43 @@ function showBatteryInfoModal(batteryId) {
             const fieldCell = document.createElement('td');
             const valueCell = document.createElement('td');
             fieldCell.innerText = name;
-            if (field.config === "display") {
+            if (field.custom_field.config === "display") {
                 valueCell.innerText = field.value;
-            } else if (field.config === "edit") {
-                switch (field.type) { // create input based on type: text, number, select
+            } else if (field.custom_field.config === "edit") {
+                switch (field.element) { // create input based on type: text, number, select
+                    case 'text':
+                        const textInput = document.createElement('input');
+                        textInput.name = field.field;
+                        textInput.type = 'text';
+                        textInput.className = 'form-control';
+                        textInput.value = field.value || '';
+                        valueCell.appendChild(textInput);
+                        break;
+                    case 'textarea':
+                        const textArea = document.createElement('textarea');
+                        textArea.className = 'form-control';
+                        textArea.name = field.field;
+                        textArea.value = field.value || '';
+                        valueCell.appendChild(textArea);
+                        break;
+                    case 'listbox':
+                    case 'radio':
+                        const select = document.createElement('select');
+                        select.className = 'form-select';
+                        select.name = field.field;
+                        field.custom_field.field_values_array.forEach(option => {
+                            const optionElement = document.createElement('option');
+                            optionElement.value = option;
+                            optionElement.text = option;
+                            if (option === field.value) {
+                                optionElement.selected = true;
+                            }
+                            select.appendChild(optionElement);
+                        });
+                        valueCell.appendChild(select);
+                        break;
+                    default:
+                        valueCell.innerText = field.value || '';
                 }
             } else {
                 continue;
@@ -107,44 +148,167 @@ function showBatteryInfoModal(batteryId) {
             document.getElementById('batteryModalCustomFields').appendChild(row);
         }
 
-    });
-    fetch('/api/locations').then(response => response.json()).then(locationsData => {
-        const locationSelect = document.getElementById('batteryLocationSelect');
-        locationSelect.innerHTML = ''; // clear existing options
-        locationsData.forEach(location => {
-            const option = document.createElement('option'); // create option element
-            option.value = location.id;
-            option.text = location.name;
-            locationSelect.appendChild(option);
-        })
+        document.getElementById('batteryNotes').innerText = data.notes;
+
+        let drainData = data.custom_fields['Battery Drain Curve'].value.trim().split('\n').map(line => line.trim());
+        let x = [];
+        let y = [];
+        drainData.forEach(point => {
+            let [capacity, voltage] = point.split(',').map(parseFloat); // convert to float (syntax inspired by AI)
+            x.push(capacity);
+            y.push(voltage);
+        });
+        if (x.length > 0 && y.length > 0) {
+            chartConfig = {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        data: y,
+                        label: 'Voltage vs Capacity',
+                    }],
+                    labels: x
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Voltage vs. Capacity Curve'
+                        },
+                    },
+                    interaction: {
+                        intersect: false,
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Capacity (Ah)'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Voltage (V)'
+                            },
+                            suggestedMin: 0,
+                            suggestedMax: 14
+                        }
+                    }
+                },
+            };
+        }
+        let chartCanvas = document.getElementById('batteryModalChart');
+
+        if (chartConfig) {
+            chart = new Chart(chartCanvas, chartConfig);
+        } else {
+            chartCanvas.parentElement.innerText = "No chart data available.";
+        }
+
+        fetch('/api/locations').then(response => response.json()).then(locationsData => {
+            const allowedLocations = locationsData.filter(location => location.allowed);
+            const locationSelect = document.getElementById('batteryLocationSelect');
+            locationSelect.innerHTML = ''; // clear existing options
+
+            allowedLocations.forEach(parentLocation => {
+                if (parentLocation.children && parentLocation.children.length > 0) {
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = parentLocation.name;
+                    locationsData.filter(l => l.parent && l.parent.id === parentLocation.id).forEach(childLocation => {
+                        const option = document.createElement('option'); // create option element
+                        option.value = childLocation.id;
+                        option.text = childLocation.name;
+                        option.selected = childLocation.id === (data.location ? data.location.id : null);
+                        optgroup.appendChild(option);
+                    });
+                    const parentOption = document.createElement('option'); // create option for parent location
+                    parentOption.value = parentLocation.id;
+                    parentOption.text = parentLocation.name;
+                    parentOption.selected = parentLocation.id === (data.location ? data.location.id : null);
+                    optgroup.appendChild(parentOption);
+                    locationSelect.appendChild(optgroup);
+                } else {
+                    const option = document.createElement('option'); // create option element
+                    option.value = parentLocation.id;
+                    option.text = parentLocation.name;
+                    option.selected = parentLocation.id === (data.location ? data.location.id : null);
+                    locationSelect.appendChild(option);
+                }
+            });
+            if (data.location === null || allowedLocations.map(l => l.id).includes(data.location.id) === false) {
+                const option = document.createElement('option'); // create option element
+                option.value = '';
+                option.text = 'Unassigned';
+                option.selected = true;
+                locationSelect.appendChild(option);
+            }
+        });
+
+        fetch('/api/status_labels').then(response => response.json()).then(statusData => {
+            const statusSelect = document.getElementById('batteryStatusSelect');
+            statusSelect.innerHTML = ''; // clear existing options
+
+            statusData.filter(s => s.allowed).forEach(status => {
+                const option = document.createElement('option'); // create option element
+                option.value = status.id;
+                option.text = status.name;
+                option.selected = status.id === data.status_label.id;
+                statusSelect.appendChild(option);
+            });
+            if (data.status_label === null || statusData.map(s => s.id).includes(data.status_label.id) === false) {
+                const option = document.createElement('option'); // create option element
+                option.value = '';
+                option.text = 'Unassigned';
+                option.selected = true;
+                statusSelect.appendChild(option);
+            }
+        });
     });
 
-    let chartCanvas = document.getElementById('batteryModalChart');
-    let chart = new Chart(chartCanvas, {
-        type: 'bar',
-        data: {
-            labels: ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Orange'],
-            datasets: [{
-                label: '# of Votes',
-                data: [12, 19, 3, 5, 2, 3],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            scales: {
-                y: {
-                    beginAtZero: true
-                }
-            }
-        }
-    });
 
     document.getElementById('batteryModal').addEventListener('hidden.bs.modal', function (event) {
         chart.destroy();
     }, { once: true });
     document.querySelector('#batteryUpdateForm > button[type="submit"]').onclick = function (e) {
         e.preventDefault();
+        const formData = new FormData(document.getElementById('batteryUpdateForm'));
+        fetch(`/api/battery/${batteryId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(Object.fromEntries(formData)),
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        }).then(response => response.json()).then(data => {
+            showToast(data.message, 'Battery Update', 'success');
+            document.getElementById('batteryModal').querySelector('.btn-close').click();
+        }).catch(error => {
+            console.error(error);
+            showToast('An error occurred while updating the battery.', 'Error', 'error');
+        });
     }
+}
+
+function periodicCheckSyncStatus(toast) {
+    fetch('/api/sync').then(response => response.json()).then(data => {
+        switch (data.status) {
+            case 'started':
+            case 'queued':
+                toast.querySelector('.toast-body').innerText = `Sync in progress... Status: ${data.status}`;
+                setTimeout(() => periodicCheckSyncStatus(toast), 1000); // check again in 1 second
+                break;
+            case 'finished':
+                toast.querySelector('.toast-body').innerText = `Sync completed successfully.`;
+                setTimeout(() => { toast.remove(); }, 3000);
+                break;
+            case 'failed':
+                toast.querySelector('.toast-body').innerText = `Sync failed!`;
+                toast.querySelector('.toast-header').className = 'toast-header bg-danger text-white';
+                break;
+        }
+    });
 }
 
 
@@ -164,7 +328,8 @@ document.addEventListener('DOMContentLoaded', function () {
         })
             .then(response => response.json())
             .then(data => {
-                showToast(data.message, 'Success', 'success');
+                toast = showToast(data.message, 'Syncing', 'success', timeout=30000);
+                periodicCheckSyncStatus(toast);
             })
             .catch(error => {
                 console.error('Error:', error);
@@ -179,7 +344,8 @@ document.addEventListener('DOMContentLoaded', function () {
     Array.from(document.getElementsByClassName('batteryModalButton')).forEach(button => {
         button.addEventListener('click', function (event) {
             showBatteryInfoModal(button.getAttribute('data-battery-id'));
-    })});
+        })
+    });
     setInterval(periodic, 5000); // repeat every 5 seconds
     periodic(); // initial call
 });

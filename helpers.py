@@ -5,13 +5,16 @@ from flask import redirect, render_template, session
 from functools import wraps
 import os
 import dotenv
+import sqlalchemy
 from models import *
 import msgspec
-
+import pythonping
+from datetime import timedelta
 dotenv_file = dotenv.find_dotenv()
 dotenv.load_dotenv(dotenv_file)
 timeout = httpx.Timeout(30.0, connect=5.0)
-
+engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
+    
 
 def snipe_it_get(
     endpoint: str,
@@ -207,3 +210,15 @@ def apology(message, code=400):
         return s
 
     return render_template("apology.html", top=code, bottom=escape(message)), code
+
+def ping():
+    output = pythonping.ping(os.getenv("SNIPE_URL").split("/")[2].split(":")[0], count=5, timeout=2)
+    with sqlalchemy.orm.Session(engine) as session:
+        kv_entry = session.get(KVStoreDb, "ping_rtt_ms")
+        if kv_entry is None:
+            kv_entry = KVStoreDb(key="ping_rtt_ms", value=str(output.rtt_avg_ms if output.success(2) else -1))
+            session.add(kv_entry)
+        else:
+            kv_entry.value = str(output.rtt_avg_ms if output.success(2) else -1)
+        session.commit()
+    return output.rtt_avg_ms if output.success(2) else None

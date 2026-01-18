@@ -51,14 +51,11 @@
             <div class="modal-body">
                 <div id="batteryModalAlerts"></div>
                 <div class="modal-body-text">
+                    <form id="batteryUpdateForm">
                     <table>
                         <tr>
                             <td>Tag</td>
                             <td id="batteryModalAssetTag">Loading...</td>
-                        </tr>
-                        <tr>
-                            <td>Status</td>
-                            <td id="batteryModalStatus">Loading...</td>
                         </tr>
                         <tr>
                             <td>Purchase Date</td>
@@ -68,7 +65,6 @@
                     <table id="batteryModalCustomFields">
 
                     </table>
-                    <form id="batteryUpdateForm">
                         <label for="batteryStatusSelect" class="form-label mt-3">Update Battery Status</label>
                         <select class="form-select" aria-label="Update Battery Status" id="batteryStatusSelect"
                             name="batteryStatusSelect">
@@ -81,15 +77,12 @@
                             name="batteryLocation">
                             <option selected>Loading...</option>
                         </select>
-                        <label for="batteryUsageTypeSelect" class="form-label mt-3">Usage Type</label>
-                        <select class="form-select" aria-label="Battery Usage Type" id="batteryUsageTypeSelect"
-                            name="batteryUsageType">
-                            <option selected>Loading...</option>
-                        </select>
                         <button type="submit" class="btn btn-primary mt-3">Update</button>
                     </form>
                 </div>
-                <canvas id="batteryModalChart"></canvas>
+                <div>
+                    <canvas id="batteryModalChart"></canvas>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
