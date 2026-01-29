@@ -1,3 +1,4 @@
 flask_session/*
 .env
 static/node_modules/
+database.db

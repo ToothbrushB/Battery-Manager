@@ -1,7 +1,7 @@
 import asyncio
 from typing import TypeVar
 import httpx
-from flask import redirect, render_template, session
+from flask import flash, redirect, render_template, session
 from functools import wraps
 import os
 import dotenv
@@ -162,12 +162,14 @@ async def snipe_it_put_async(
     client = client if client is not None else httpx.AsyncClient()
     if semaphore is not None:
         async with semaphore:
-            return await client.put(
-                snipe_url + endpoint, headers=headers, json=data, timeout=timeout
+            req = await client.put(
+                snipe_url + endpoint, headers=headers, data=data, timeout=timeout
             )
+            return req
+            
     else:
         return await client.put(
-            snipe_url + endpoint, headers=headers, json=data, timeout=timeout
+            snipe_url + endpoint, headers=headers, data=data, timeout=timeout
         )
 
 
@@ -186,30 +188,6 @@ def login_required(f):
 
     return decorated_function
 
-
-def apology(message, code=400):
-    """Render message as an apology to user."""
-
-    def escape(s):
-        """
-        Escape special characters.
-
-        https://github.com/jacebrowning/memegen#special-characters
-        """
-        for old, new in [
-            ("-", "--"),
-            (" ", "-"),
-            ("_", "__"),
-            ("?", "~q"),
-            ("%", "~p"),
-            ("#", "~h"),
-            ("/", "~s"),
-            ('"', "''"),
-        ]:
-            s = s.replace(old, new)
-        return s
-
-    return render_template("apology.html", top=code, bottom=escape(message)), code
 
 def ping():
     output = pythonping.ping(os.getenv("SNIPE_URL").split("/")[2].split(":")[0], count=5, timeout=2)

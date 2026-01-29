@@ -260,12 +260,19 @@ class Asset(msgspec.Struct):
     expected_checkin: Optional[Date] = None
     purchase_cost: Optional[float] = None
     custom_fields: Optional[dict[str, CustomFieldAsset]] = None
-
+    
 
 class Base(DeclarativeBase):
     pass
 
+class UserDb(Base):
+    __tablename__ = "user"
+    username: Mapped[str] = mapped_column(primary_key=True)
+    password: Mapped[str]
 
+    def __repr__(self) -> str:
+        return f"User(username={self.username!r}, password={self.password!r})"
+    
 class LocationDb(Base):
     __tablename__ = "location"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -380,6 +387,12 @@ class StatusLabelDb(Base):
         obj.remote_data = msgspec.msgpack.encode(label)
         obj.last_synced_at = datetime.now().timestamp()
         return obj
+    
+    def toStatusLabelAsset(self) -> StatusLabelAsset:
+        return StatusLabelAsset(
+            id=self.id,
+            name=self.name
+        )
 
 class FieldMappingDb(Base):
     __tablename__ = "field_mapping"
@@ -426,6 +439,7 @@ class BatteryView(msgspec.Struct):
             custom_fields=asset.custom_fields if asset else None,
             purchased_date=asset.purchased_date if asset else None,
         )
+
 
 class KVStoreDb(Base):
     __tablename__ = "kv_store"

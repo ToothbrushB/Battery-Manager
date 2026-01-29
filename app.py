@@ -1,6 +1,7 @@
 import json
 import os
 import dotenv
+from redis import Redis
 
 dotenv_file = dotenv.find_dotenv()
 dotenv.load_dotenv(dotenv_file)
@@ -20,11 +21,14 @@ import sqlalchemy
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 
-
 # Configure application
 app = Flask(__name__)
 csrf = SeaSurf(app)
 app.register_blueprint(api)
+app.config['SESSION_TYPE'] = 'redis'
+app.config['SESSION_REDIS'] = Redis()
+flask_session.Session(app)
+
 # Talisman setup Source - https://stackoverflow.com/a
 # Posted by user21344659
 # Retrieved 2026-01-07, License - CC BY-SA 4.0
@@ -86,7 +90,9 @@ def after_request(response):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    with sqlalchemy.orm.Session(engine) as db_session:
+        recommended_batteries = db_session.query(BatteryDb).limit(5).all()
+        return render_template("index.html", recommended_batteries=recommended_batteries)
 
 
 @app.route("/list_view", methods=["GET"])
@@ -162,6 +168,47 @@ def load_matches():
 def grid_view():
     return render_template("grid_view.html")
 
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    """Register user"""
+    if request.method == "GET":
+        return render_template("register.html")
+    else:
+        username = request.form.get("username")
+        password = request.form.get("password")
+        confirmation = request.form.get("confirmation")
+
+        if not username:
+            flash("Must Give Username", "error")
+            return render_template("register.html")
+
+        if not password:
+            flash("Must Give Password", "error")
+            return render_template("register.html")
+
+        if not confirmation:
+            flash("Must Give Confirmation", "error")
+            return render_template("register.html")
+
+        if password != confirmation:
+            flash("Password Do Not Match", "error")
+            return render_template("register.html")
+
+        hash = generate_password_hash(password)
+
+        try:
+            with sqlalchemy.orm.Session(engine) as db_session:
+                db_session.add(UserDb(username=username, password=hash))
+                db_session.commit()
+                new_user = username
+                
+        except Exception as e:
+            print(e)
+            flash("Username already exists", "error")
+            return render_template("register.html")
+        session["user_id"] = new_user
+
+        return redirect("/")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -183,19 +230,18 @@ def login():
             return render_template("login.html")
 
         # Query database for username
-        rows = cursor.execute(
-            "SELECT * FROM users WHERE username = ?", (request.form.get("username"))
-        ).fetchall()
+        with sqlalchemy.orm.Session(engine) as db_session:
+            existing = db_session.get(UserDb, request.form.get("username"))
 
-        # Ensure username exists and password is correct
-        if len(rows) != 1 or not check_password_hash(
-            rows[0]["hash"], request.form.get("password")
-        ):
-            flash("Invalid username and/or password.", "error")
-            return render_template("login.html")
+            # Ensure username exists and password is correct
+            if not existing or not check_password_hash(
+                existing.password, request.form.get("password")
+            ):
+                flash("Invalid username and/or password.", "error")
+                return render_template("login.html")
 
-        # Remember which user has logged in
-        session["user_id"] = rows[0]["id"]
+            # Remember which user has logged in
+            session["user_id"] = existing.username
 
         # Redirect user to home page
         return redirect("/")

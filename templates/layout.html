@@ -55,6 +55,12 @@
             </div>
         </div>
         <div class="container justify-content-end">
+            {% if session.get("user_id") %}
+            <span class="navbar-text mx-2">Logged in as {{ session.get("user_id") | e }}</span>
+            <a class="btn btn-outline-danger mx-2" href="{{ url_for('logout') }}">Log Out</a>
+            {% else %}
+            <a class="btn btn-outline-primary mx-2" href="{{ url_for('login') }}">Log In</a>
+            {% endif %}
             <button class="btn m-2 btn-info" data-bs-toggle="modal" data-bs-target="#readerModal">
                 <i class="bi bi-qr-code-scan"></i> Scan QR
             </button>

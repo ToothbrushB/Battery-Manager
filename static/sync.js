@@ -87,14 +87,13 @@ function getBatteryAlerts(battery) {
 
 // create battery info modal
 function showBatteryInfoModal(batteryId) {
-    const modalBody = document.querySelector('#batteryModal .modal-body-text');
     let chartConfig = {};
     let chart;
     fetch(`/api/battery/${batteryId}`).then(response => response.json()).then(data => {
         document.getElementById("batteryModalAlerts").innerHTML = getBatteryAlerts(data).join('\n');
         document.getElementById('batteryModalAssetTag').innerText = data.asset_tag || 'N/A';
         document.getElementById('batteryModalPurchaseDate').innerText = data.purchased_date || 'N/A';
-
+        document.querySelector('#batteryModal .modal-title').innerText = data.name;
         document.getElementById('batteryModalCustomFields').innerHTML = '';
         console.log(data)
         for (const [name, field] of Object.entries(data.custom_fields)) { // convert object to iterable with array destructuring 
@@ -105,7 +104,7 @@ function showBatteryInfoModal(batteryId) {
             if (field.custom_field.config === "display") {
                 valueCell.innerText = field.value;
             } else if (field.custom_field.config === "edit") {
-                switch (field.element) { // create input based on type: text, number, select
+                switch (field.custom_field.type) { // create input based on type: text, number, select
                     case 'text':
                         const textInput = document.createElement('input');
                         textInput.name = field.field;
@@ -276,18 +275,41 @@ function showBatteryInfoModal(batteryId) {
         e.preventDefault();
         const formData = new FormData(document.getElementById('batteryUpdateForm'));
         fetch(`/api/battery/${batteryId}`, {
-            method: 'PATCH',
+            method: 'PUT',
             body: JSON.stringify(Object.fromEntries(formData)),
             headers: {
                 'Content-Type': 'application/json'
             }
         }).then(response => response.json()).then(data => {
+            if (data.status && data.status === 'error') {
+                showToast(data.message, 'Error', 'error');
+                return;
+            }
             showToast(data.message, 'Battery Update', 'success');
             document.getElementById('batteryModal').querySelector('.btn-close').click();
         }).catch(error => {
             console.error(error);
             showToast('An error occurred while updating the battery.', 'Error', 'error');
         });
+    }
+
+    document.getElementById('uploadBatteryChart').onclick = function (e) {
+        e.preventDefault();
+        const uploadInput = document.getElementById('batteryChartFile');
+        if (uploadInput.files.length === 0) {
+            showToast('Please select a file to upload.', 'Error', 'error');
+            return;
+        }
+        const file = uploadInput.files[0];
+        if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const content = e.target.result;
+                    console.log(content);
+                };
+                reader.readAsText(file);
+                
+            }
     }
 }
 
