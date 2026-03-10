@@ -9,7 +9,6 @@ from rq import job
 import rq
 import sync
 import netifaces as ni 
-import socket
 from helpers import ping
 
 redisq = Queue(connection=Redis())
