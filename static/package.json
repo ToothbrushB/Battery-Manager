@@ -16,6 +16,7 @@
     "bootstrap": "^5.3.8",
     "bootstrap-icons": "^1.13.1",
     "chart.js": "^4.5.1",
+    "d3": "^7.9.0",
     "feather-icons": "^4.29.2",
     "html5-qrcode": "^2.3.8"
   },

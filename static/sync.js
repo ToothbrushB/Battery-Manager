@@ -95,7 +95,6 @@ function showBatteryInfoModal(batteryId) {
         document.getElementById('batteryModalPurchaseDate').innerText = data.purchased_date || 'N/A';
         document.querySelector('#batteryModal .modal-title').innerText = data.name;
         document.getElementById('batteryModalCustomFields').innerHTML = '';
-        console.log(data)
         for (const [name, field] of Object.entries(data.custom_fields)) { // convert object to iterable with array destructuring 
             const row = document.createElement('tr');
             const fieldCell = document.createElement('td');
@@ -149,23 +148,25 @@ function showBatteryInfoModal(batteryId) {
 
         document.getElementById('batteryNotes').innerText = data.notes;
 
-        let drainData = data.custom_fields['Battery Drain Curve'].value.trim().split('\n').map(line => line.trim());
-        let x = [];
-        let y = [];
-        drainData.forEach(point => {
-            let [capacity, voltage] = point.split(',').map(parseFloat); // convert to float (syntax inspired by AI)
-            x.push(capacity);
-            y.push(voltage);
+        const data2 = d3.csvParseRows(data.custom_fields['Battery Drain Curve'].value, function(d, i) {
+            return {
+            time: +d[0],
+            voltage: +d[1], // Convert strings to numbers securely
+            current: +d[2],
+            capacity: +d[3],
+            temperature: +d[4]
+            };
         });
-        if (x.length > 0 && y.length > 0) {
+
+        if (data2.length > 0) {
             chartConfig = {
                 type: 'line',
                 data: {
                     datasets: [{
-                        data: y,
-                        label: 'Voltage vs Capacity',
+                        data: data2,
+                        label: 'Battery Discharge',
+                        tension: 0.1
                     }],
-                    labels: x
                 },
                 options: {
                     responsive: true,
@@ -180,6 +181,7 @@ function showBatteryInfoModal(batteryId) {
                     },
                     scales: {
                         x: {
+                            type: 'linear',
                             display: true,
                             title: {
                                 display: true,
@@ -187,6 +189,7 @@ function showBatteryInfoModal(batteryId) {
                             }
                         },
                         y: {
+                            type: 'linear',
                             display: true,
                             title: {
                                 display: true,
@@ -195,6 +198,10 @@ function showBatteryInfoModal(batteryId) {
                             suggestedMin: 0,
                             suggestedMax: 14
                         }
+                    },
+                    parsing: {
+                        xAxisKey: 'capacity',
+                        yAxisKey: 'voltage'
                     }
                 },
             };
@@ -302,14 +309,20 @@ function showBatteryInfoModal(batteryId) {
         }
         const file = uploadInput.files[0];
         if (file) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const content = e.target.result;
-                    console.log(content);
-                };
-                reader.readAsText(file);
-                
-            }
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                const content = e.target.result;
+                const formElement = document.createElement('input');
+                formElement.type = 'hidden';
+                formElement.name = '_snipeit_battery_drain_curve_10';
+                formElement.value = content;
+                document.getElementById('batteryUpdateForm').appendChild(formElement);
+                showToast('Battery drain curve uploaded. Please click Update to save changes.', 'Upload Successful', 'success');
+            };
+            reader.readAsText(file);
+
+
+        }
     }
 }
 
@@ -350,7 +363,7 @@ document.addEventListener('DOMContentLoaded', function () {
         })
             .then(response => response.json())
             .then(data => {
-                toast = showToast(data.message, 'Syncing', 'success', timeout=30000);
+                toast = showToast(data.message, 'Syncing', 'success', timeout = 30000);
                 periodicCheckSyncStatus(toast);
             })
             .catch(error => {

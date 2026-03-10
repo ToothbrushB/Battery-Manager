@@ -11,7 +11,11 @@ sqlalchemy
 sqlite
 See requirements.txt for more detail
 # How to run the project
-add stuff to .env and then run with WSGI server
+Install Redis
+Install pip requirements
+Configure stuff in .env file
+Run Flask
+
 # Any design decisions or tradeoffs made
 Wanted to add more robust support for locations (like a grid view of the battery cart) and ability to sync with match schedule but no time.
 Also wanted to integrate with hardware to facilitate auto location changes/checkouts but that's not done either. 

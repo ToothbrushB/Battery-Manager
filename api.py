@@ -53,7 +53,6 @@ def trigger_sync():
 @api.route("/qr_scan", methods=["POST"])
 def qr_scan():
     """Handle QR code scan"""
-    # TODO: Implement QR scan handling logic here
     input = request.json.get("qr_data")
     if "/hardware/" in input:  # this is a url in the form of /hardware/{id}
         id = input.split("/hardware/")[1]
@@ -66,6 +65,28 @@ def qr_scan():
         return get_battery_info(id)
     else:
         return jsonify({"message": "Invalid QR code data", "status": "error"}), 400
+
+@api.route("/register_tag", methods=["POST"])
+def register_tag():
+    """Register a new NFC tag to a battery"""
+    data = request.json
+    battery_id = data.get("battery_id")
+    tag_id = data.get("tag_id")
+    if not battery_id or not tag_id:
+        return jsonify({"message": "Battery ID and Tag ID are required", "status": "error"}), 400
+    with sqlalchemy.orm.Session(engine) as db_session:
+        battery = db_session.get(BatteryDb, battery_id)
+        if not battery:
+            return jsonify({"message": "Battery not found", "status": "error"}), 404
+        battery.nfc_tag = tag_id
+        db_session.commit()
+    return jsonify({"message": "Tag registered successfully", "status": "success"}), 200
+
+@api.route("/reader/<int:reader_id>", methods=["GET", "POST"])
+def reader_info(reader_id):
+    """Retrieve reader information by ID"""
+    if request.method == "GET":
+        pass  # interact with the NFC reader
 
 @api.route("/battery/<int:battery_id>", methods=["GET", "PUT"])
 def get_battery_info(battery_id):
@@ -158,6 +179,7 @@ def get_locations():
         return Response(
             msgspec.json.encode(locations), 200, mimetype="application/json"
         )
+        
 @api.route("/status_labels", methods=["GET"])
 def get_status_labels():
     with engine.connect() as connection:
