@@ -1,17 +1,16 @@
-import dotenv
 import os
-import requests
+import httpx
+from preferences import get_preference
 
-dotenv.load_dotenv()
 
 headers = {
-    'X-TBA-AUTH-KEY': os.getenv('TBA_API_KEY'),
+    'X-TBA-AUTH-KEY': get_preference('tba-api-key'),
     'Accept': 'application/json'
 }
 
 def get_team(team_key):
     url = f'https://www.thebluealliance.com/api/v3/team/{team_key}'
-    response = requests.get(url, headers=headers)
+    response = httpx.get(url, headers=headers)
     if response.status_code == 200:
         events = response.json()
         return events
@@ -19,8 +18,8 @@ def get_team(team_key):
         return None
     
 def tba_request(endpoint):
-    url = os.getenv('TBA_URL') + endpoint
-    response = requests.get(url, headers=headers)
+    url = get_preference('tba-url') + endpoint
+    response = httpx.get(url, headers=headers)
     if response.status_code == 200:
         data = response.json()
         return data

@@ -1,10 +1,6 @@
 import json
 import os
-import dotenv
 from redis import Redis
-
-dotenv_file = dotenv.find_dotenv()
-dotenv.load_dotenv(dotenv_file)
 
 from flask import Flask, flash, redirect, render_template, request, session
 from flask_seasurf import SeaSurf
@@ -15,6 +11,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from helpers import snipe_it_get, snipe_it_post
 from api import api
 from models import *
+from preferences import get_preference, set_preference, load_settings_from_config
 import sqlalchemy
 
 
@@ -57,26 +54,8 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY")
 
 config = json.load(open("config.json"))
 
-
-def load_settings():
-    with sqlalchemy.orm.Session(engine) as session:
-        existing_mappings = session.query(FieldMappingDb).all()
-        if len(existing_mappings) == 0:
-            session.add(FieldMappingDb(
-                name="Battery Usage Type",
-                db_column_name="",
-            ))
-            session.add(FieldMappingDb(
-                name="Battery Voltage Curve",
-                db_column_name="",
-            ))
-        session.commit()
-    for section in config:
-        for setting in section["settings"]:
-            setting["value"] = os.getenv(setting["id"].upper().replace("-", "_"))
-
-
-load_settings()
+# Initialize settings from config file
+load_settings_from_config()
 
 
 @app.after_request
@@ -122,12 +101,7 @@ def settings():
                 for setting in section["settings"]:
                     new_value = request.form.get(setting["name"])
                     if new_value:
-                        os.environ[setting["id"].upper().replace("-", "_")] = new_value
-                        dotenv.set_key(
-                            dotenv_file,
-                            setting["id"].upper().replace("-", "_"),
-                            new_value,
-                        )
+                        set_preference(setting["id"], new_value)
                         setting["value"] = new_value
             for field in existing_fields:
                 new_config = request.form.get(f"field_{field.db_column_name}")
@@ -149,6 +123,13 @@ def settings():
             flash("Settings updated successfully!", "success")
             return redirect("/settings")
         else:
+            # Update config with current preference values from database
+            for section in config:
+                for setting in section["settings"]:
+                    current_value = get_preference(setting["id"])
+                    if current_value is not None:
+                        setting["value"] = current_value
+            
             return render_template(
                 "settings.html",
                 config=config,

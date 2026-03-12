@@ -1,16 +1,11 @@
 from __future__ import annotations
 import asyncio
 from datetime import datetime
-import dotenv
 import sqlalchemy
 from sqlalchemy.orm import Session
 from models import *
 from helpers import *
 import msgspec
-
-
-dotenv_file = dotenv.find_dotenv()
-dotenv.load_dotenv(dotenv_file)
 
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
@@ -36,7 +31,7 @@ async def batch_update_assets(assets: list[Asset]):
         return await asyncio.gather(*tasks) # wait for all tasks to complete
 
 def download_hardware_changes():
-    assets = asyncio.run(fetch_all(Asset, '/hardware', params={"model_id": int(os.getenv("BATTERY_MODEL_ID"))}))
+    assets = asyncio.run(fetch_all(Asset, '/hardware', params={"model_id": int(get_preference("battery-model-id") or 0)}))
     field_data = msgspec.json.decode(asyncio.run(snipe_it_get_async('/fields')).text, type=Paginated[CustomField])
     locations = asyncio.run(fetch_all(Location, '/locations'))
     status_labels = asyncio.run(fetch_all(StatusLabel, '/statuslabels'))

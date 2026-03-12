@@ -4,22 +4,20 @@ import httpx
 from flask import flash, redirect, render_template, session
 from functools import wraps
 import os
-import dotenv
 import sqlalchemy
 from models import *
 import msgspec
 import pythonping
+from preferences import get_preference
 from datetime import timedelta
-dotenv_file = dotenv.find_dotenv()
-dotenv.load_dotenv(dotenv_file)
 timeout = httpx.Timeout(30.0, connect=5.0)
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
-    
+
 
 def snipe_it_get(
     endpoint: str,
-    api_key=os.getenv("SNIPE_API_KEY"),
-    snipe_url=os.getenv("SNIPE_URL"),
+    api_key=get_preference("snipe-api-key"),
+    snipe_url=get_preference("snipe-url"),
     params=None,
 ):
     headers = {
@@ -89,8 +87,8 @@ async def fetch_batch(
 
 async def snipe_it_get_async(
     endpoint,
-    api_key=os.getenv("SNIPE_API_KEY"),
-    snipe_url=os.getenv("SNIPE_URL"),
+    api_key=get_preference("snipe-api-key"),
+    snipe_url=get_preference("snipe-url"),
     client=None,
     params=None,
     semaphore: asyncio.Semaphore = None,
@@ -114,8 +112,8 @@ async def snipe_it_get_async(
 
 def snipe_it_post(
     endpoint,
-    api_key=os.getenv("SNIPE_API_KEY"),
-    snipe_url=os.getenv("SNIPE_URL"),
+    api_key=get_preference("snipe-api-key"),
+    snipe_url=get_preference("snipe-url"),
     data=None,
 ):
     headers = {
@@ -131,8 +129,8 @@ def snipe_it_post(
 
 def snipe_it_put(
     endpoint,
-    api_key=os.getenv("SNIPE_API_KEY"),
-    snipe_url=os.getenv("SNIPE_URL"),
+    api_key=get_preference("snipe-api-key"),
+    snipe_url=get_preference("snipe-url"),
     data=None,
 ):
     headers = {
@@ -148,8 +146,8 @@ def snipe_it_put(
 
 async def snipe_it_put_async(
     endpoint,
-    api_key=os.getenv("SNIPE_API_KEY"),
-    snipe_url=os.getenv("SNIPE_URL"),
+    api_key=get_preference("snipe-api-key"),
+    snipe_url=get_preference("snipe-url"),
     client=None,
     data=None,
     semaphore: asyncio.Semaphore = None,
@@ -190,7 +188,7 @@ def login_required(f):
 
 
 def ping():
-    output = pythonping.ping(os.getenv("SNIPE_URL").split("/")[2].split(":")[0], count=5, timeout=2)
+    output = pythonping.ping(get_preference("snipe-url").split("/")[2].split(":")[0], count=5, timeout=2)
     with sqlalchemy.orm.Session(engine) as session:
         kv_entry = session.get(KVStoreDb, "ping_rtt_ms")
         if kv_entry is None:

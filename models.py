@@ -331,8 +331,13 @@ class CustomFieldDb(Base):
         obj.last_synced_at = datetime.now().timestamp()
         return obj
         
+class PreferenceDb(Base):
+    __tablename__ = "preference"
+    key: Mapped[str] = mapped_column(primary_key=True)
+    value: Mapped[Optional[str]]
 
-
+    def __repr__(self) -> str:
+        return f"Preference(key={self.key!r}, value={self.value!r})"
 
 class BatteryDb(Base):
     __tablename__ = "battery"
