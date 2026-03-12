@@ -1,5 +1,11 @@
-import json
 import os
+import sqlalchemy
+from models import *
+engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
+Base.metadata.create_all(engine)
+
+
+import json
 from redis import Redis
 
 from flask import Flask, flash, redirect, render_template, request, session
@@ -10,20 +16,15 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from helpers import snipe_it_get, snipe_it_post
 from api import api
-from models import *
 from preferences import get_preference, set_preference, load_settings_from_config
-import sqlalchemy
 
-
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
-Base.metadata.create_all(engine)
 
 # Configure application
 app = Flask(__name__)
 csrf = SeaSurf(app)
 app.register_blueprint(api)
 app.config['SESSION_TYPE'] = 'redis'
-app.config['SESSION_REDIS'] = Redis()
+app.config['SESSION_REDIS'] = Redis(host=os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379))
 flask_session.Session(app)
 
 # Talisman setup Source - https://stackoverflow.com/a

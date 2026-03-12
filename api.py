@@ -11,7 +11,7 @@ import sync
 import netifaces as ni 
 from helpers import ping
 
-redisq = Queue(connection=Redis())
+redisq = Queue(connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
 scheduler = Scheduler(queue=redisq, connection=redisq.connection)
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -39,7 +39,7 @@ def trigger_sync():
             kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
             if kv_entry is not None:
                 try:
-                    sync_job = job.Job.fetch(kv_entry.value, connection=Redis())
+                    sync_job = job.Job.fetch(kv_entry.value, connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
                 except rq.exceptions.NoSuchJobError:
                     sync_job = None
             else:
@@ -214,7 +214,7 @@ def get_status():
         kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
         if kv_entry is not None:
             try:
-                sync_job = job.Job.fetch(kv_entry.value, connection=Redis())
+                sync_job = job.Job.fetch(kv_entry.value, connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
             except rq.exceptions.NoSuchJobError:
                 sync_job = None
         else:
