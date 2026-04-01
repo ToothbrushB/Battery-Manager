@@ -267,8 +267,8 @@ class Base(DeclarativeBase):
 
 class UserDb(Base):
     __tablename__ = "user"
-    username: Mapped[str] = mapped_column(primary_key=True)
-    password: Mapped[str]
+    username: Mapped[str] = mapped_column(String(255), primary_key=True)
+    password: Mapped[str] = mapped_column(String(255))
 
     def __repr__(self) -> str:
         return f"User(username={self.username!r}, password={self.password!r})"
@@ -276,12 +276,12 @@ class UserDb(Base):
 class LocationDb(Base):
     __tablename__ = "location"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[Optional[str]]
+    name: Mapped[Optional[str]] = mapped_column(String(255))
     allowed: Mapped[Optional[bool]] = mapped_column(default=False)
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("location.id"))
     is_parent: Mapped[bool] = mapped_column(default=False)
     remote_data: Mapped[Optional[bytes]]
-    last_synced_at: Mapped[Optional[str]]
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
         return f"Address(id={self.id!r}, email_address={self.email_address!r})"
@@ -304,13 +304,13 @@ class CustomFieldConfig(enum.Enum):
 
 class CustomFieldDb(Base):
     __tablename__ = "custom_field"
-    db_column_name: Mapped[str] = mapped_column(primary_key=True)
-    name: Mapped[Optional[str]]
+    db_column_name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(255))
     config: Mapped[CustomFieldConfig] = mapped_column(
-        String, default=CustomFieldConfig.HIDE.value
+        String(50), default=CustomFieldConfig.HIDE.value
     )
     remote_data: Mapped[Optional[bytes]]
-    last_synced_at: Mapped[Optional[str]]
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
         return (
@@ -333,8 +333,8 @@ class CustomFieldDb(Base):
         
 class PreferenceDb(Base):
     __tablename__ = "preference"
-    key: Mapped[str] = mapped_column(primary_key=True)
-    value: Mapped[Optional[str]]
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(String(1000))
 
     def __repr__(self) -> str:
         return f"Preference(key={self.key!r}, value={self.value!r})"
@@ -342,14 +342,14 @@ class PreferenceDb(Base):
 class BatteryDb(Base):
     __tablename__ = "battery"
     id: Mapped[int] = mapped_column(primary_key=True)
-    asset_tag: Mapped[Optional[str]]
-    name: Mapped[Optional[str]]
+    asset_tag: Mapped[Optional[str]] = mapped_column(String(100))
+    name: Mapped[Optional[str]] = mapped_column(String(255))
     location_id: Mapped[Optional[int]]
     remote_data: Mapped[Optional[bytes]]
-    remote_modified_at: Mapped[Optional[str]]
-    last_synced_at: Mapped[Optional[str]]
-    local_modified_at: Mapped[Optional[str]]
-    sync_status: Mapped[Optional[str]]
+    remote_modified_at: Mapped[Optional[str]] = mapped_column(String(50))
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
+    local_modified_at: Mapped[Optional[str]] = mapped_column(String(50))
+    sync_status: Mapped[Optional[str]] = mapped_column(String(50))
 
     @classmethod
     def fromAsset(cls, asset: Asset, existing: BatteryDb = None) -> BatteryDb:
@@ -374,11 +374,11 @@ class BatteryDb(Base):
 class StatusLabelDb(Base):
     __tablename__ = "status_label"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[Optional[str]]
-    type: Mapped[Optional[str]]
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    type: Mapped[Optional[str]] = mapped_column(String(50))
     allowed: Mapped[Optional[bool]] = mapped_column(default=False)
     remote_data: Mapped[Optional[bytes]]
-    last_synced_at: Mapped[Optional[str]]
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
         return f"StatusLabel(id={self.id!r}, name={self.name!r}, type={self.type!r})"
@@ -402,8 +402,8 @@ class StatusLabelDb(Base):
 class FieldMappingDb(Base):
     __tablename__ = "field_mapping"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str]
-    db_column_name: Mapped[str]
+    name: Mapped[str] = mapped_column(String(255))
+    db_column_name: Mapped[str] = mapped_column(String(255))
 
     def __repr__(self) -> str:
         return f"FieldMapping(id={self.id!r}, field_name={self.name!r}, db_column_name={self.db_column_name!r})"
@@ -448,8 +448,105 @@ class BatteryView(msgspec.Struct):
 
 class KVStoreDb(Base):
     __tablename__ = "kv_store"
-    key: Mapped[str] = mapped_column(primary_key=True)
-    value: Mapped[Optional[str]]
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(String(1000))
 
     def __repr__(self) -> str:
         return f"KVS(key={self.key!r}, value={self.value!r})"
+
+
+class EventDb(Base):
+    __tablename__ = "tba_event"
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    start_date: Mapped[Optional[str]] = mapped_column(String(20))
+    end_date: Mapped[Optional[str]] = mapped_column(String(20))
+    year: Mapped[Optional[int]]
+    city: Mapped[Optional[str]] = mapped_column(String(100))
+    state_prov: Mapped[Optional[str]] = mapped_column(String(100))
+    country: Mapped[Optional[str]] = mapped_column(String(100))
+
+    def __repr__(self) -> str:
+        return f"Event(key={self.key!r}, name={self.name!r})"
+
+    @classmethod
+    def from_tba_event(cls, event_data: dict, existing: 'EventDb' = None) -> 'EventDb':
+        obj = existing if existing else cls()
+        obj.key = event_data.get('key', '')
+        obj.name = event_data.get('name')
+        obj.start_date = event_data.get('start_date')
+        obj.end_date = event_data.get('end_date')
+        obj.year = event_data.get('year')
+        obj.city = event_data.get('city')
+        obj.state_prov = event_data.get('state_prov')
+        obj.country = event_data.get('country')
+        return obj
+
+
+class MatchDb(Base):
+    __tablename__ = "tba_match"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    event_key: Mapped[str] = mapped_column(String(50))
+    comp_level: Mapped[str] = mapped_column(String(20))
+    match_number: Mapped[int]
+    set_number: Mapped[int]
+    predicted_time: Mapped[Optional[int]]
+    actual_time: Mapped[Optional[int]]
+    red_alliance: Mapped[Optional[str]] = mapped_column(String(500))  # JSON list of team keys
+    blue_alliance: Mapped[Optional[str]] = mapped_column(String(500))  # JSON list of team keys
+    winning_alliance: Mapped[Optional[str]] = mapped_column(String(10))
+    assigned_battery_id: Mapped[Optional[int]] = mapped_column(ForeignKey("battery.id"), nullable=True)
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
+
+    def __repr__(self) -> str:
+        return f"Match(key={self.key!r}, match_number={self.match_number!r})"
+
+    @classmethod
+    def from_tba_match(cls, match_data: dict, existing: 'MatchDb' = None) -> 'MatchDb':
+        import json
+        obj = existing if existing else cls()
+        obj.key = match_data.get('key', '')
+        obj.event_key = match_data.get('event_key', '')
+        obj.comp_level = match_data.get('comp_level', '')
+        obj.match_number = match_data.get('match_number', 0)
+        obj.set_number = match_data.get('set_number', 1)
+        obj.predicted_time = match_data.get('predicted_time')
+        obj.actual_time = match_data.get('actual_time')
+        obj.winning_alliance = match_data.get('winning_alliance')
+        alliances = match_data.get('alliances') or {}
+        obj.red_alliance = json.dumps((alliances.get('red') or {}).get('team_keys', []))
+        obj.blue_alliance = json.dumps((alliances.get('blue') or {}).get('team_keys', []))
+        obj.last_synced_at = str(datetime.now().timestamp())
+        return obj
+
+    def update_from_tba(self, match_data: dict):
+        """Update match from TBA without changing battery assignment."""
+        import json
+        self.comp_level = match_data.get('comp_level', self.comp_level)
+        self.match_number = match_data.get('match_number', self.match_number)
+        self.set_number = match_data.get('set_number', self.set_number)
+        self.predicted_time = match_data.get('predicted_time', self.predicted_time)
+        self.actual_time = match_data.get('actual_time', self.actual_time)
+        self.winning_alliance = match_data.get('winning_alliance', self.winning_alliance)
+        alliances = match_data.get('alliances') or {}
+        self.red_alliance = json.dumps((alliances.get('red') or {}).get('team_keys', []))
+        self.blue_alliance = json.dumps((alliances.get('blue') or {}).get('team_keys', []))
+        self.last_synced_at = str(datetime.now().timestamp())
+
+    def to_dict(self) -> dict:
+        import json
+        return {
+            'key': self.key,
+            'event_key': self.event_key,
+            'comp_level': self.comp_level,
+            'match_number': self.match_number,
+            'set_number': self.set_number,
+            'predicted_time': self.predicted_time,
+            'actual_time': self.actual_time,
+            'red_alliance': json.loads(self.red_alliance) if self.red_alliance else [],
+            'blue_alliance': json.loads(self.blue_alliance) if self.blue_alliance else [],
+            'winning_alliance': self.winning_alliance,
+            'assigned_battery_id': self.assigned_battery_id,
+            'assigned_battery': None,  # populated by caller
+            'last_synced_at': self.last_synced_at,
+        }

@@ -1,17 +1,211 @@
 {% extends "layout.html" %}
 
-{% block title %}
-Load Matches
-{% endblock %}
+{% block title %}Load Matches{% endblock %}
 
 {% block main %}
-<div>
-    <h1>Load Matches From TBA</h1>
-    <form method="post" action="/load_matches">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <label for="event_key">TBA Event Key</label>
-        <input type="text" class="form-control mb-3" id="event_key" name="event_key" placeholder="Enter Event Key (e.g., 2024miket)">
-        <button type="submit" class="btn btn-primary">Load Matches</button>
-    </form>
+<script nonce="{{ csp_nonce() }}">
+    window.initialMatches = {{ matches | tojson }};
+    window.initialEventKey = {{ event_key | tojson }};
+    window.initialTeamKey = {{ team_key | tojson }};
+    window.initialLastSyncedAt = {{ last_synced_at | tojson }};
+</script>
+
+<div class="text-start">
+    <h1 class="mb-4">Match Schedule</h1>
+
+    <!-- Event Selection -->
+    <div class="card mb-4">
+        <div class="card-header fw-bold">Event Selection</div>
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                    <label for="teamKeyInput" class="form-label">Team Key</label>
+                    <input type="text" class="form-control" id="teamKeyInput"
+                        placeholder="e.g. frc254" value="{{ team_key }}">
+                </div>
+                <div class="col-md-2">
+                    <label for="yearInput" class="form-label">Year</label>
+                    <input type="number" class="form-control" id="yearInput"
+                        value="{{ current_year }}" min="1992" max="2035">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Event</label>
+                    <div id="eventDropdownSection">
+                        <select class="form-select" id="eventSelect">
+                            <option value="">-- Enter team key and click "Load Events" --</option>
+                            {% if event_key %}
+                            <option value="{{ event_key }}" selected>{{ event_key }}</option>
+                            {% endif %}
+                        </select>
+                    </div>
+                    <div id="eventManualSection" class="d-none">
+                        <input type="text" class="form-control" id="eventKeyManual"
+                            placeholder="e.g. 2026casd" value="{{ event_key }}">
+                    </div>
+                    <div class="form-check mt-1">
+                        <input type="checkbox" class="form-check-input" id="manualEntryToggle">
+                        <label class="form-check-label" for="manualEntryToggle">Enter event key manually</label>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-outline-secondary" id="fetchEventsBtn">
+                            <span class="d-none spinner-border spinner-border-sm me-1" id="fetchEventsSpinner"></span>
+                            Load Events
+                        </button>
+                        <button class="btn btn-primary" id="loadMatchesBtn">
+                            <span class="d-none spinner-border spinner-border-sm me-1" id="loadMatchesSpinner"></span>
+                            Load Matches
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sync info bar -->
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <span id="syncInfoText" class="text-muted small">
+            {% if last_synced_at %}
+            Last synced: <span id="lastSyncedAtDisplay">{{ last_synced_at }}</span>
+            {% else %}
+            Not yet synced.
+            {% endif %}
+        </span>
+        <button class="btn btn-sm btn-outline-primary" id="tbaSyncBtn">
+            <span class="d-none spinner-border spinner-border-sm me-1" id="tbaSyncSpinner"></span>
+            <i class="bi bi-arrow-repeat"></i> Sync Now
+        </button>
+    </div>
+
+    <!-- Match Tabs -->
+    <ul class="nav nav-tabs" id="matchTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="upcoming-tab" data-bs-toggle="tab"
+                data-bs-target="#upcoming" type="button" role="tab">
+                Upcoming <span class="badge bg-primary" id="upcomingCount">0</span>
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="completed-tab" data-bs-toggle="tab"
+                data-bs-target="#completed" type="button" role="tab">
+                Completed <span class="badge bg-secondary" id="completedCount">0</span>
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link" id="all-tab" data-bs-toggle="tab"
+                data-bs-target="#all" type="button" role="tab">
+                All <span class="badge bg-dark" id="allCount">0</span>
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content border border-top-0 p-3 mb-4" id="matchTabContent">
+        <!-- Upcoming -->
+        <div class="tab-pane fade show active" id="upcoming" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Match</th>
+                            <th>Predicted Time</th>
+                            <th>Red Alliance</th>
+                            <th>Blue Alliance</th>
+                            <th>Assigned Battery</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="upcomingMatchesBody"></tbody>
+                </table>
+            </div>
+            <p class="text-center text-muted" id="upcomingEmpty">No upcoming matches.</p>
+        </div>
+
+        <!-- Completed -->
+        <div class="tab-pane fade" id="completed" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Match</th>
+                            <th>Actual Time</th>
+                            <th>Red Alliance</th>
+                            <th>Blue Alliance</th>
+                            <th>Winner</th>
+                            <th>Assigned Battery</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="completedMatchesBody"></tbody>
+                </table>
+            </div>
+            <p class="text-center text-muted" id="completedEmpty">No completed matches.</p>
+        </div>
+
+        <!-- All -->
+        <div class="tab-pane fade" id="all" role="tabpanel">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Match</th>
+                            <th>Predicted Time</th>
+                            <th>Actual Time</th>
+                            <th>Red Alliance</th>
+                            <th>Blue Alliance</th>
+                            <th>Winner</th>
+                            <th>Assigned Battery</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="allMatchesBody"></tbody>
+                </table>
+            </div>
+            <p class="text-center text-muted" id="allEmpty">No matches loaded.</p>
+        </div>
+    </div>
 </div>
+
+<!-- Battery Assignment Modal -->
+<div class="modal fade" id="assignBatteryModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content text-start">
+            <div class="modal-header">
+                <h5 class="modal-title">Assign Battery to Match</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-4">Match</dt>
+                    <dd class="col-sm-8" id="assignModalMatchDisplay">--</dd>
+                    <dt class="col-sm-4">Red Alliance</dt>
+                    <dd class="col-sm-8"><span class="badge text-bg-danger" id="assignModalRedAlliance">--</span></dd>
+                    <dt class="col-sm-4">Blue Alliance</dt>
+                    <dd class="col-sm-8"><span class="badge text-bg-primary" id="assignModalBlueAlliance">--</span></dd>
+                    <dt class="col-sm-4">Predicted Time</dt>
+                    <dd class="col-sm-8" id="assignModalTime">--</dd>
+                </dl>
+                <hr>
+                <div class="mb-2">
+                    <strong>Current Assignment:</strong>
+                    <span id="assignModalCurrentBattery" class="text-muted fst-italic">None</span>
+                </div>
+                <div class="mb-3">
+                    <label for="batterySelectDropdown" class="form-label fw-bold">Select Battery</label>
+                    <select class="form-select" id="batterySelectDropdown">
+                        <option value="">-- None (unassign) --</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="confirmAssignBtn">Assign Battery</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='tba.js') }}"></script>
 {% endblock %}

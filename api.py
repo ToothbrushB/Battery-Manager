@@ -8,8 +8,11 @@ from rq_scheduler import Scheduler
 from rq import job
 import rq
 import sync
+import tba_sync
+import tba as tba_client
 import netifaces as ni 
 from helpers import ping
+from preferences import get_preference
 
 redisq = Queue(connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
 scheduler = Scheduler(queue=redisq, connection=redisq.connection)
@@ -19,6 +22,7 @@ engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 
 scheduler.schedule(scheduled_time=datetime.now(), func=ping, interval=60, repeat=None, queue_name='default')
 scheduler.schedule(scheduled_time=datetime.now(), func=sync.download_hardware_changes, interval=300, repeat=None, queue_name='default')
+scheduler.schedule(scheduled_time=datetime.now(), func=tba_sync.download_match_updates, interval=300, repeat=None, queue_name='default')
 
 @api.route("/sync", methods=["POST", "GET"])
 def trigger_sync():
@@ -245,3 +249,143 @@ def get_status():
     return jsonify(
         status
     )
+
+
+@api.route("/batteries", methods=["GET"])
+def get_batteries():
+    """Retrieve batteries filtered by allowed statuses and locations."""
+    with sqlalchemy.orm.Session(engine) as db_session:
+        allowed_status_ids = {s.id for s in db_session.query(StatusLabelDb).filter_by(allowed=True).all()}
+        allowed_parent_ids = {l.id for l in db_session.query(LocationDb).filter_by(allowed=True).all()}
+        allowed_child_ids = {
+            l.id for l in db_session.query(LocationDb).all()
+            if l.parent_id in allowed_parent_ids
+        }
+        all_allowed_loc_ids = allowed_parent_ids | allowed_child_ids
+
+        result = []
+        for b in db_session.query(BatteryDb).all():
+            if not b.remote_data:
+                continue
+            asset = msgspec.msgpack.decode(b.remote_data, type=Asset)
+            status_id = asset.status_label.id if asset.status_label else None
+            location_id = asset.location.id if asset.location else None
+            status_ok = not allowed_status_ids or status_id in allowed_status_ids
+            location_ok = not all_allowed_loc_ids or location_id in all_allowed_loc_ids
+            if status_ok and location_ok:
+                result.append({
+                    'id': b.id,
+                    'name': b.name,
+                    'asset_tag': b.asset_tag,
+                    'status': asset.status_label.name if asset.status_label else None,
+                    'location': asset.location.name if asset.location else None,
+                })
+        return jsonify(result)
+
+
+@api.route("/tba/events", methods=["GET"])
+def get_tba_events():
+    """Fetch team events from TBA API."""
+    team_key = request.args.get('team_key')
+    year = request.args.get('year', datetime.now().year)
+    if not team_key:
+        return jsonify({"message": "team_key is required", "status": "error"}), 400
+
+    events = tba_client.get_team_events(team_key, int(year))
+    if events is None:
+        return jsonify({"message": "Failed to fetch events from TBA. Check your API key and team key.", "status": "error"}), 503
+
+    events.sort(key=lambda e: e.get('start_date', ''))
+    return jsonify(events)
+
+
+@api.route("/tba/matches", methods=["GET"])
+def get_tba_matches():
+    """Retrieve matches for an event from the local cache."""
+    event_key = request.args.get('event_key') or get_preference('tba-event-key')
+    if not event_key or event_key == 'your-event-key-here':
+        return jsonify({'matches': [], 'last_synced_at': None, 'event_key': None})
+
+    with sqlalchemy.orm.Session(engine) as db_session:
+        matches = []
+        for m in db_session.query(MatchDb).filter_by(event_key=event_key).all():
+            d = m.to_dict()
+            if m.assigned_battery_id:
+                battery = db_session.get(BatteryDb, m.assigned_battery_id)
+                if battery:
+                    d['assigned_battery'] = {'id': battery.id, 'name': battery.name, 'asset_tag': battery.asset_tag}
+            matches.append(d)
+
+        kv = db_session.get(KVStoreDb, 'last_tba_sync_at')
+        last_synced_at = kv.value if kv else None
+
+    return jsonify({'matches': matches, 'last_synced_at': last_synced_at, 'event_key': event_key})
+
+
+@api.route("/tba/assign_battery", methods=["POST"])
+def assign_battery_to_match():
+    """Assign a battery to a match and update the battery notes for Snipe-IT sync."""
+    data = request.json
+    match_key = data.get('match_key')
+    battery_id = data.get('battery_id')
+
+    if not match_key:
+        return jsonify({"message": "match_key is required", "status": "error"}), 400
+
+    with sqlalchemy.orm.Session(engine) as db_session:
+        match = db_session.get(MatchDb, match_key)
+        if not match:
+            return jsonify({"message": "Match not found", "status": "error"}), 404
+
+        match.assigned_battery_id = int(battery_id) if battery_id else None
+
+        if battery_id:
+            battery = db_session.get(BatteryDb, int(battery_id))
+            if not battery:
+                return jsonify({"message": "Battery not found", "status": "error"}), 404
+
+            if battery.remote_data:
+                asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
+                existing_notes = asset.notes or ''
+                # Remove any previous match assignment line then append new one
+                lines = [l for l in existing_notes.split('\n') if not l.startswith('Match: ')]
+                lines.append(f'Match: {match_key}')
+                asset.notes = '\n'.join(lines).strip()
+                # TODO. Need to update battery usage type to "Competition"
+                battery.remote_data = msgspec.msgpack.encode(asset)
+
+            battery.sync_status = "local_updated"
+            battery.local_modified_at = str(datetime.now().timestamp())
+            
+
+        db_session.commit()
+
+    return jsonify({"message": "Battery assigned successfully", "status": "success"}), 200
+
+
+@api.route("/tba/sync", methods=["POST", "GET"])
+def trigger_tba_sync():
+    """Trigger or check status of TBA match sync."""
+    if request.method == "POST":
+        sync_job = redisq.enqueue(tba_sync.download_match_updates)
+        with sqlalchemy.orm.Session(engine) as db_session:
+            kv = db_session.get(KVStoreDb, "last_tba_sync_job_id")
+            if kv is None:
+                db_session.add(KVStoreDb(key="last_tba_sync_job_id", value=sync_job.id))
+            else:
+                kv.value = sync_job.id
+            db_session.commit()
+        return jsonify({"status": "Queued", "message": "TBA sync initiated"}), 202
+    else:
+        with sqlalchemy.orm.Session(engine) as db_session:
+            kv = db_session.get(KVStoreDb, "last_tba_sync_job_id")
+            if kv is not None:
+                try:
+                    sync_job = job.Job.fetch(kv.value, connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
+                except rq.exceptions.NoSuchJobError:
+                    sync_job = None
+            else:
+                sync_job = None
+        if sync_job is None:
+            return jsonify({"status": "No TBA sync job initiated"}), 404
+        return jsonify({"status": sync_job.get_status()}), 200

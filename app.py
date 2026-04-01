@@ -143,7 +143,29 @@ def settings():
 
 @app.route("/load_matches", methods=["GET"])
 def load_matches():
-    return render_template("load_matches.html")
+    from datetime import datetime as dt
+    with sqlalchemy.orm.Session(engine) as db_session:
+        event_key = get_preference('tba-event-key') or ''
+        team_key = get_preference('tba-team-key') or ''
+        matches = []
+        if event_key and event_key != 'your-event-key-here':
+            for m in db_session.query(MatchDb).filter_by(event_key=event_key).all():
+                d = m.to_dict()
+                if m.assigned_battery_id:
+                    battery = db_session.get(BatteryDb, m.assigned_battery_id)
+                    if battery:
+                        d['assigned_battery'] = {'id': battery.id, 'name': battery.name, 'asset_tag': battery.asset_tag}
+                matches.append(d)
+        kv = db_session.get(KVStoreDb, 'last_tba_sync_at')
+        last_synced_at = kv.value if kv else None
+    return render_template(
+        "load_matches.html",
+        matches=matches,
+        event_key=event_key,
+        team_key=team_key,
+        current_year=dt.now().year,
+        last_synced_at=last_synced_at,
+    )
 
 
 @app.route("/grid_view", methods=["GET"])
