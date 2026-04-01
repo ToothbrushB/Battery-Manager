@@ -267,8 +267,8 @@ class Base(DeclarativeBase):
 
 class UserDb(Base):
     __tablename__ = "user"
-    username: Mapped[str] = mapped_column(primary_key=True)
-    password: Mapped[str]
+    username: Mapped[str] = mapped_column(String(255), primary_key=True)
+    password: Mapped[str] = mapped_column(String(255))
 
     def __repr__(self) -> str:
         return f"User(username={self.username!r}, password={self.password!r})"
@@ -276,12 +276,12 @@ class UserDb(Base):
 class LocationDb(Base):
     __tablename__ = "location"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[Optional[str]]
+    name: Mapped[Optional[str]] = mapped_column(String(255))
     allowed: Mapped[Optional[bool]] = mapped_column(default=False)
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("location.id"))
     is_parent: Mapped[bool] = mapped_column(default=False)
     remote_data: Mapped[Optional[bytes]]
-    last_synced_at: Mapped[Optional[str]]
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
         return f"Address(id={self.id!r}, email_address={self.email_address!r})"
@@ -304,13 +304,13 @@ class CustomFieldConfig(enum.Enum):
 
 class CustomFieldDb(Base):
     __tablename__ = "custom_field"
-    db_column_name: Mapped[str] = mapped_column(primary_key=True)
-    name: Mapped[Optional[str]]
+    db_column_name: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[Optional[str]] = mapped_column(String(255))
     config: Mapped[CustomFieldConfig] = mapped_column(
-        String, default=CustomFieldConfig.HIDE.value
+        String(50), default=CustomFieldConfig.HIDE.value
     )
     remote_data: Mapped[Optional[bytes]]
-    last_synced_at: Mapped[Optional[str]]
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
         return (
@@ -333,8 +333,8 @@ class CustomFieldDb(Base):
         
 class PreferenceDb(Base):
     __tablename__ = "preference"
-    key: Mapped[str] = mapped_column(primary_key=True)
-    value: Mapped[Optional[str]]
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(String(1000))
 
     def __repr__(self) -> str:
         return f"Preference(key={self.key!r}, value={self.value!r})"
@@ -342,14 +342,14 @@ class PreferenceDb(Base):
 class BatteryDb(Base):
     __tablename__ = "battery"
     id: Mapped[int] = mapped_column(primary_key=True)
-    asset_tag: Mapped[Optional[str]]
-    name: Mapped[Optional[str]]
+    asset_tag: Mapped[Optional[str]] = mapped_column(String(100))
+    name: Mapped[Optional[str]] = mapped_column(String(255))
     location_id: Mapped[Optional[int]]
     remote_data: Mapped[Optional[bytes]]
-    remote_modified_at: Mapped[Optional[str]]
-    last_synced_at: Mapped[Optional[str]]
-    local_modified_at: Mapped[Optional[str]]
-    sync_status: Mapped[Optional[str]]
+    remote_modified_at: Mapped[Optional[str]] = mapped_column(String(50))
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
+    local_modified_at: Mapped[Optional[str]] = mapped_column(String(50))
+    sync_status: Mapped[Optional[str]] = mapped_column(String(50))
 
     @classmethod
     def fromAsset(cls, asset: Asset, existing: BatteryDb = None) -> BatteryDb:
@@ -374,11 +374,11 @@ class BatteryDb(Base):
 class StatusLabelDb(Base):
     __tablename__ = "status_label"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[Optional[str]]
-    type: Mapped[Optional[str]]
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    type: Mapped[Optional[str]] = mapped_column(String(50))
     allowed: Mapped[Optional[bool]] = mapped_column(default=False)
     remote_data: Mapped[Optional[bytes]]
-    last_synced_at: Mapped[Optional[str]]
+    last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
         return f"StatusLabel(id={self.id!r}, name={self.name!r}, type={self.type!r})"
@@ -402,8 +402,8 @@ class StatusLabelDb(Base):
 class FieldMappingDb(Base):
     __tablename__ = "field_mapping"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str]
-    db_column_name: Mapped[str]
+    name: Mapped[str] = mapped_column(String(255))
+    db_column_name: Mapped[str] = mapped_column(String(255))
 
     def __repr__(self) -> str:
         return f"FieldMapping(id={self.id!r}, field_name={self.name!r}, db_column_name={self.db_column_name!r})"
@@ -448,8 +448,8 @@ class BatteryView(msgspec.Struct):
 
 class KVStoreDb(Base):
     __tablename__ = "kv_store"
-    key: Mapped[str] = mapped_column(primary_key=True)
-    value: Mapped[Optional[str]]
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    value: Mapped[Optional[str]] = mapped_column(String(1000))
 
     def __repr__(self) -> str:
         return f"KVS(key={self.key!r}, value={self.value!r})"

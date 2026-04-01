@@ -37,7 +37,59 @@ def download_hardware_changes():
     status_labels = asyncio.run(fetch_all(StatusLabel, '/statuslabels'))
     
     assets_to_upload = []
-    with Session(engine) as session:
+    with Session(engine) as session:  
+        for field in field_data.rows: 
+            existing = session.get(CustomFieldDb, field.db_column_name)
+            if existing is None: # new field
+                session.add(CustomFieldDb.fromCustomField(field))
+            else: # existing field, update with latest change
+                field.config = existing.config # preserve local config
+                existing = CustomFieldDb.fromCustomField(field, existing)
+                existing.sync_status = "remote_updated"
+        session.commit()
+        
+        # Sort locations to process parents before children (respects FK constraint)
+        sorted_locations = []
+        locations_by_id = {loc.id: loc for loc in locations}
+        processed_ids = set()
+        
+        def can_process(location: Location) -> bool:
+            """Check if location's parent has been processed or doesn't exist"""
+            return location.parent is None or location.parent.id in processed_ids
+        
+        # Keep processing until all locations are handled
+        remaining = locations[:]
+        while remaining:
+            # Find locations that can be processed in this iteration
+            processable = [loc for loc in remaining if can_process(loc)]
+            
+            if not processable and remaining:
+                # Circular dependency or missing parent - process remaining as-is
+                print(f"Warning: {len(remaining)} locations have unresolved dependencies")
+                processable = remaining
+            
+            for location in processable:
+                sorted_locations.append(location)
+                processed_ids.add(location.id)
+                remaining.remove(location)
+        
+        for location in sorted_locations:
+            existing = session.get(LocationDb, location.id)
+            if existing is None: # new location
+                session.add(LocationDb.fromLocation(location))
+            else: # existing location, update with latest change
+                location.allowed = existing.allowed
+                existing = LocationDb.fromLocation(location, existing)
+        session.commit()
+        
+        for status_label in status_labels:
+            existing = session.get(StatusLabelDb, status_label.id)
+            if existing is None: # new status label
+                session.add(StatusLabelDb.fromStatusLabel(status_label))
+            else: # existing status label, update with latest change
+                existing = StatusLabelDb.fromStatusLabel(status_label, existing)
+        session.commit()
+        
         for asset in assets: # add all batteries to the db
             existing = session.get(BatteryDb, asset.id)
             if existing is None: # new battery
@@ -53,34 +105,6 @@ def download_hardware_changes():
                 existing = BatteryDb.fromAsset(asset, existing)
                 existing.sync_status = "remote_updated"
                 existing.local_modified_at = None
-        session.commit()
-    
-        for field in field_data.rows: 
-            existing = session.get(CustomFieldDb, field.db_column_name)
-            if existing is None: # new field
-                session.add(CustomFieldDb.fromCustomField(field))
-            else: # existing field, update with latest change
-                field.config = existing.config # preserve local config
-                existing = CustomFieldDb.fromCustomField(field, existing)
-                existing.sync_status = "remote_updated"
-        session.commit()
-        
-        
-        for location in locations:
-            existing = session.get(LocationDb, location.id)
-            if existing is None: # new location
-                session.add(LocationDb.fromLocation(location))
-            else: # existing location, update with latest change
-                location.allowed = existing.allowed
-                existing = LocationDb.fromLocation(location, existing)
-        session.commit()
-        
-        for status_label in status_labels:
-            existing = session.get(StatusLabelDb, status_label.id)
-            if existing is None: # new status label
-                session.add(StatusLabelDb.fromStatusLabel(status_label))
-            else: # existing status label, update with latest change
-                existing = StatusLabelDb.fromStatusLabel(status_label, existing)
         session.commit()
     
         asyncio.run(batch_update_assets([msgspec.msgpack.decode(battery.remote_data, type=Asset) for battery in assets_to_upload]))

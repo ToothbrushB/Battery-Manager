@@ -40,7 +40,7 @@ def set_preference(key: str, value: str) -> None:
         if pref:
             pref.value = value
         else:
-            session.add(PreferenceDb(key=key, value=value))
+            session.add(PreferenceDb(key=key, value=str(value)))
         session.commit()
 
 
@@ -74,7 +74,7 @@ def load_settings_from_config(config_path: str = "config.json") -> None:
         for section in config:
             for setting in section["settings"]:
                 if setting["id"] not in existing_keys:
-                    session.add(PreferenceDb(key=setting["id"], value=setting["value"]))
+                    session.add(PreferenceDb(key=setting["id"], value=str(setting["value"])))
         
         session.commit()
 
@@ -104,5 +104,5 @@ def update_preferences_from_dict(preferences: dict[str, str]) -> None:
             if pref:
                 pref.value = value
             else:
-                session.add(PreferenceDb(key=key, value=value))
+                session.add(PreferenceDb(key=key, value=str(value)))
         session.commit()
