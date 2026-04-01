@@ -1,0 +1,48 @@
+{% extends "layout.html" %}
+{% block title %}History{% endblock %}
+
+{% block main %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div class="text-start">
+        <h1 class="h3 mb-1">Change History</h1>
+        <p class="text-muted mb-0">Most recent activity across all batteries. Showing up to 200 entries.</p>
+    </div>
+</div>
+
+<div class="table-responsive border rounded shadow-sm">
+    <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th scope="col" class="text-nowrap">Timestamp</th>
+                <th scope="col" class="text-nowrap">Battery</th>
+                <th scope="col" class="text-start">Notes</th>
+                {% for field in display_fields %}
+                <th scope="col" class="text-start text-nowrap">{{ field.name or field.db_column_name }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% if history_entries %}
+                {% for entry in history_entries %}
+                <tr>
+                    <td class="text-nowrap">{{ entry.timestamp or "Unknown" }}</td>
+                    <td class="text-start">
+                        <div class="fw-semibold">{{ entry.battery_name or "Unnamed Battery" }}</div>
+                        <div class="text-muted small">{{ entry.asset_tag or "No asset tag" }}</div>
+                    </td>
+                    <td class="text-start">{{ entry.notes or "" }}</td>
+                    {% for field in display_fields %}
+                    {% set value = entry.custom_fields.get(field.db_column_name) %}
+                    <td class="text-start">{{ value if value is not none else "" }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="{{ 3 + display_fields|length }}" class="text-center text-muted py-5">No history yet. Make some updates to see them appear here.</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

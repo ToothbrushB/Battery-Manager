@@ -26,6 +26,26 @@ def get_preference(key: str) -> Optional[str]:
         return pref.value if pref else None
 
 
+def get_allowed_checkout_assets() -> list[dict[str, str]]:
+    """Parse the allowed checkout assets preference into id/name pairs."""
+
+    raw = get_preference("asset-checkout-allowed") or ""
+    assets: list[dict[str, str]] = []
+    for entry in raw.split(","):
+        token = entry.strip()
+        if not token:
+            continue
+        if ":" in token:
+            asset_id, name = token.split(":", 1)
+        else:
+            asset_id, name = token, ""
+        asset_id = asset_id.strip()
+        name = name.strip()
+        if asset_id:
+            assets.append({"id": asset_id, "name": name})
+    return assets
+
+
 def set_preference(key: str, value: str) -> None:
     """
     Set a preference value. Creates the preference if it doesn't exist,

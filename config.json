@@ -60,6 +60,13 @@
                 "label": "Battery Model ID",
                 "type": "number",
                 "value": 1
+            },
+            {
+                "id": "asset-checkout-allowed",
+                "name": "asset-checkout-allowed",
+                "label": "Allowed Asset IDs and Names for Checkout (comma-separated; format: id:name)",
+                "type": "text",
+                "value": "001041:Stampede,001024:Rodeo,001062:RUR"
             }
         ]
     }

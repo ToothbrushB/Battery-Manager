@@ -12,13 +12,15 @@ import tba_sync
 import tba as tba_client
 import netifaces as ni 
 from helpers import ping
-from preferences import get_preference
+from preferences import get_preference, get_allowed_checkout_assets
 
 redisq = Queue(connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
 scheduler = Scheduler(queue=redisq, connection=redisq.connection)
 api = Blueprint("api", __name__, url_prefix="/api")
 
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
+Base.metadata.create_all(engine)
+ensure_battery_checkout_columns(engine)
 
 scheduler.schedule(scheduled_time=datetime.now(), func=ping, interval=60, repeat=None, queue_name='default')
 scheduler.schedule(scheduled_time=datetime.now(), func=sync.download_hardware_changes, interval=300, repeat=None, queue_name='default')
@@ -142,10 +144,27 @@ def get_battery_info(battery_id):
                         unpacked.custom_fields[field.name].value = value
                     else:
                         return jsonify({"message": f"Custom field {db_name} not found", "status": "error"}), 400
+            checkout_target = data.get("batteryCheckoutTarget")
+            if checkout_target == "":
+                checkout_target = None
+            if checkout_target and checkout_target != result.checked_out_to_asset_id:
+                result.checked_out_to_asset_id = checkout_target
+                result.checkout_pending_asset_id = checkout_target
+                try:
+                    assigned_id = int(checkout_target)
+                except (TypeError, ValueError):
+                    assigned_id = None
+                if assigned_id is not None:
+                    unpacked.assigned_to = Assignee(
+                        id=assigned_id, name=None, type="asset"
+                    )
+            elif not checkout_target:
+                result.checkout_pending_asset_id = None
             
             result.remote_data = msgspec.msgpack.encode(unpacked)
             result.sync_status = "local_updated"
             result.local_modified_at = datetime.now().timestamp()
+            record_battery_history(db_session, result)
             db_session.commit()
         return jsonify({"message": "Battery updated successfully", "status": "success"}), 200
 
@@ -283,6 +302,11 @@ def get_batteries():
         return jsonify(result)
 
 
+@api.route("/checkout_targets", methods=["GET"])
+def get_checkout_targets():
+    return jsonify(get_allowed_checkout_assets())
+
+
 @api.route("/tba/events", methods=["GET"])
 def get_tba_events():
     """Fetch team events from TBA API."""
@@ -356,6 +380,7 @@ def assign_battery_to_match():
 
             battery.sync_status = "local_updated"
             battery.local_modified_at = str(datetime.now().timestamp())
+            record_battery_history(db_session, battery)
             
 
         db_session.commit()

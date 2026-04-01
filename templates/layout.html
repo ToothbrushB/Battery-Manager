@@ -45,6 +45,10 @@
                             href="{{ url_for('grid_view') }}">Grid</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'history' %}active{% endif %}"
+                            href="{{ url_for('history') }}">History</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link {% if request.endpoint == 'load_matches' %}active{% endif %}"
                             href="{{ url_for('load_matches') }}">Load Matches</a>
                     </li>

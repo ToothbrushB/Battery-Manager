@@ -3,12 +3,14 @@ import asyncio
 from datetime import datetime
 import sqlalchemy
 from sqlalchemy.orm import Session
+import httpx
 from models import *
 from helpers import *
 import msgspec
 
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
+ensure_battery_checkout_columns(engine)
 
 
 async def batch_update_assets(assets: list[Asset]):
@@ -29,6 +31,29 @@ async def batch_update_assets(assets: list[Asset]):
             tasks.append(snipe_it_put_async(f"/hardware/{asset.id}", data=data, client=client, semaphore=semaphore))
             
         return await asyncio.gather(*tasks) # wait for all tasks to complete
+
+
+async def batch_checkout_assets(checkouts: list[tuple[int, str]]):
+    if not checkouts:
+        return []
+    semaphore = asyncio.Semaphore(5)
+    async with httpx.AsyncClient() as client:
+        tasks = []
+        for battery_id, target_asset_id in checkouts:
+            payload = {
+                "checkout_to_type": "asset",
+                "assigned_asset": target_asset_id,
+                "note": "Checked out via Battery Manager",
+            }
+            tasks.append(
+                snipe_it_post_async(
+                    f"/hardware/{battery_id}/checkout",
+                    data=payload,
+                    client=client,
+                    semaphore=semaphore,
+                )
+            )
+    return await asyncio.gather(*tasks, return_exceptions=True)
 
 def download_hardware_changes():
     assets = asyncio.run(fetch_all(Asset, '/hardware', params={"model_id": int(get_preference("battery-model-id") or 0)}))
@@ -96,6 +121,7 @@ def download_hardware_changes():
                 obj = BatteryDb.fromAsset(asset)
                 obj.sync_status = "new"
                 session.add(obj)
+                record_battery_history(session, obj)
             else: # existing battery, update with latest change
                 if (float(existing.local_modified_at) if existing.local_modified_at is not None else 0) > datetime.strptime(asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S").timestamp(): # if there is a local change
                     print(f"Local change detected for asset {asset.id}, skipping download")
@@ -105,8 +131,32 @@ def download_hardware_changes():
                 existing = BatteryDb.fromAsset(asset, existing)
                 existing.sync_status = "remote_updated"
                 existing.local_modified_at = None
+                record_battery_history(session, existing)
         session.commit()
-    
+        pending_checkouts: list[tuple[int, str]] = []
+        for battery in (
+            session.query(BatteryDb)
+            .filter(BatteryDb.checkout_pending_asset_id.isnot(None))
+            .all()
+        ):
+            if battery.checkout_pending_asset_id:
+                pending_checkouts.append((battery.id, battery.checkout_pending_asset_id))
+        if pending_checkouts:
+            responses = asyncio.run(batch_checkout_assets(pending_checkouts))
+            for (battery_id, _), response in zip(pending_checkouts, responses):
+                if isinstance(response, Exception):
+                    print(f"Checkout failed for battery {battery_id}: {response}")
+                    continue
+                if response.status_code >= 300:
+                    print(
+                        f"Checkout failed for battery {battery_id}: {response.status_code} {response.text}"
+                    )
+                    continue
+                db_battery = session.get(BatteryDb, battery_id)
+                if db_battery:
+                    db_battery.checkout_pending_asset_id = None
+            session.commit()
+
         asyncio.run(batch_update_assets([msgspec.msgpack.decode(battery.remote_data, type=Asset) for battery in assets_to_upload]))
         
 if __name__ == "__main__":

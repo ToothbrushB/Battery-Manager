@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS 'battery' (
   'last_synced_at' INTEGER,
   'local_modified_at' INTEGER,
   'sync_status' TEXT,
+  'checked_out_to_asset_id' TEXT,
+  'checkout_pending_asset_id' TEXT,
   FOREIGN KEY('location_id') REFERENCES 'location'('id')
 );
 

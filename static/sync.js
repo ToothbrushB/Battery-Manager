@@ -272,6 +272,26 @@ function showBatteryInfoModal(batteryId) {
                 statusSelect.appendChild(option);
             }
         });
+
+        fetch('/api/checkout_targets').then(response => response.json()).then(targets => {
+            const checkoutSelect = document.getElementById('batteryCheckoutSelect');
+            checkoutSelect.innerHTML = '';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.text = targets.length ? 'Select an asset' : 'No allowed assets configured';
+            checkoutSelect.appendChild(placeholder);
+            const selectedValue = data.checkout_pending_asset_id || data.checked_out_to_asset_id || '';
+            targets.forEach(target => {
+                const option = document.createElement('option');
+                option.value = target.id;
+                option.text = target.name ? `${target.id} – ${target.name}` : target.id;
+                if (target.id === selectedValue) {
+                    option.selected = true;
+                }
+                checkoutSelect.appendChild(option);
+            });
+            checkoutSelect.disabled = targets.length === 0;
+        });
     });
 
 

@@ -6,7 +6,8 @@ import msgspec
 from typing import List
 from typing import Optional
 from sqlalchemy import ForeignKey
-from sqlalchemy import String
+from sqlalchemy import String, Text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -176,8 +177,8 @@ class Company(msgspec.Struct):
 
 class Assignee(msgspec.Struct):
     id: int
-    name: str
-    type: str
+    name: Optional[str] = None
+    type: Optional[str] = None
 
 
 class CustomField(msgspec.Struct):
@@ -350,6 +351,8 @@ class BatteryDb(Base):
     last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
     local_modified_at: Mapped[Optional[str]] = mapped_column(String(50))
     sync_status: Mapped[Optional[str]] = mapped_column(String(50))
+    checked_out_to_asset_id: Mapped[Optional[str]] = mapped_column(String(100))
+    checkout_pending_asset_id: Mapped[Optional[str]] = mapped_column(String(100))
 
     @classmethod
     def fromAsset(cls, asset: Asset, existing: BatteryDb = None) -> BatteryDb:
@@ -363,6 +366,12 @@ class BatteryDb(Base):
             asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S"
         ).timestamp()
         obj.last_synced_at = datetime.now().timestamp()
+        assigned_asset_id = None
+        if asset.assigned_to and getattr(asset.assigned_to, "type", None) == "asset":
+            assigned_asset_id = str(asset.assigned_to.id)
+        obj.checked_out_to_asset_id = assigned_asset_id
+        if assigned_asset_id == obj.checkout_pending_asset_id:
+            obj.checkout_pending_asset_id = None
         return obj
 
     def __repr__(self) -> str:
@@ -417,6 +426,8 @@ class BatteryView(msgspec.Struct):
     notes: Optional[str]
     purchased_date: Optional[str]
     custom_fields: Optional[dict[str, CustomFieldAsset]]
+    checked_out_to_asset_id: Optional[str]
+    checkout_pending_asset_id: Optional[str]
 
     remote_modified_at: Optional[str]
     last_synced_at: Optional[str]
@@ -443,6 +454,44 @@ class BatteryView(msgspec.Struct):
             sync_status=battery.sync_status,
             custom_fields=asset.custom_fields if asset else None,
             purchased_date=asset.purchased_date if asset else None,
+            checked_out_to_asset_id=battery.checked_out_to_asset_id,
+            checkout_pending_asset_id=battery.checkout_pending_asset_id,
+        )
+
+
+class BatteryHistoryDb(Base):
+    __tablename__ = "battery_history"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id"))
+    asset_tag: Mapped[Optional[str]] = mapped_column(String(100))
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    recorded_at: Mapped[Optional[str]] = mapped_column(String(50))
+    custom_fields_blob: Mapped[Optional[bytes]]
+
+    def custom_field_values(self) -> dict[str, Optional[str]]:
+        if not self.custom_fields_blob:
+            return {}
+        return msgspec.msgpack.decode(
+            self.custom_fields_blob, type=dict[str, Optional[str]]
+        )
+
+    @classmethod
+    def from_asset(
+        cls, asset: Asset, recorded_at: Optional[float] = None
+    ) -> "BatteryHistoryDb":
+        custom_values: dict[str, Optional[str]] = {}
+        if asset.custom_fields:
+            for field_asset in asset.custom_fields.values():
+                if field_asset and field_asset.field:
+                    custom_values[field_asset.field] = field_asset.value
+        return cls(
+            battery_id=asset.id,
+            asset_tag=asset.asset_tag,
+            name=asset.name,
+            notes=asset.notes,
+            recorded_at=str(recorded_at or datetime.now().timestamp()),
+            custom_fields_blob=msgspec.msgpack.encode(custom_values),
         )
 
 
@@ -550,3 +599,53 @@ class MatchDb(Base):
             'assigned_battery': None,  # populated by caller
             'last_synced_at': self.last_synced_at,
         }
+
+
+def ensure_battery_checkout_columns(engine):
+    inspector = inspect(engine)
+    existing_columns = {col["name"] for col in inspector.get_columns("battery")}
+    statements = []
+    if "checked_out_to_asset_id" not in existing_columns:
+        statements.append(
+            text("ALTER TABLE battery ADD COLUMN checked_out_to_asset_id TEXT")
+        )
+    if "checkout_pending_asset_id" not in existing_columns:
+        statements.append(
+            text("ALTER TABLE battery ADD COLUMN checkout_pending_asset_id TEXT")
+        )
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(statement)
+
+
+def record_battery_history(
+    session, battery: BatteryDb, recorded_at: Optional[float] = None
+):
+    """Persist a snapshot entry for the provided battery if it differs from the latest."""
+
+    if not battery.remote_data:
+        return None
+
+    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
+    entry = BatteryHistoryDb.from_asset(asset, recorded_at)
+
+    last_entry = (
+        session.query(BatteryHistoryDb)
+        .filter(BatteryHistoryDb.battery_id == entry.battery_id)
+        .order_by(BatteryHistoryDb.recorded_at.desc())
+        .first()
+    )
+
+    if (
+        last_entry
+        and last_entry.asset_tag == entry.asset_tag
+        and (last_entry.name or "") == (entry.name or "")
+        and (last_entry.notes or "") == (entry.notes or "")
+        and (last_entry.custom_fields_blob or b"")
+        == (entry.custom_fields_blob or b"")
+    ):
+        return last_entry
+
+    session.add(entry)
+    return entry

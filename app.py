@@ -1,8 +1,10 @@
 import os
+from datetime import datetime
 import sqlalchemy
 from models import *
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
+ensure_battery_checkout_columns(engine)
 
 
 import json
@@ -85,6 +87,56 @@ def list_view():
 
     return render_template(
         "list_view.html", batteries=[BatteryView.from_battery_db(row) for row in result]
+    )
+
+
+@app.route("/history", methods=["GET"])
+def history():
+    with sqlalchemy.orm.Session(engine) as db_session:
+        display_fields = (
+            db_session.query(CustomFieldDb)
+            .filter(
+                CustomFieldDb.config.in_(
+                    [CustomFieldConfig.DISPLAY.value, CustomFieldConfig.EDIT.value]
+                )
+            )
+            .order_by(CustomFieldDb.name.asc())
+            .all()
+        )
+
+        entries = (
+            db_session.query(BatteryHistoryDb)
+            .order_by(BatteryHistoryDb.recorded_at.desc())
+            .limit(200)
+            .all()
+        )
+
+        history_rows = []
+        for entry in entries:
+            timestamp = None
+            if entry.recorded_at:
+                try:
+                    timestamp = datetime.fromtimestamp(float(entry.recorded_at)).strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
+                except (ValueError, TypeError):
+                    timestamp = entry.recorded_at
+            history_rows.append(
+                {
+                    "id": entry.id,
+                    "battery_id": entry.battery_id,
+                    "battery_name": entry.name,
+                    "asset_tag": entry.asset_tag,
+                    "notes": entry.notes,
+                    "timestamp": timestamp,
+                    "custom_fields": entry.custom_field_values(),
+                }
+            )
+
+    return render_template(
+        "history.html",
+        history_entries=history_rows,
+        display_fields=display_fields,
     )
 
 

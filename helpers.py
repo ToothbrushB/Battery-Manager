@@ -171,6 +171,30 @@ async def snipe_it_put_async(
         )
 
 
+async def snipe_it_post_async(
+    endpoint,
+    api_key=get_preference("snipe-api-key"),
+    snipe_url=get_preference("snipe-url"),
+    client=None,
+    data=None,
+    semaphore: asyncio.Semaphore = None,
+):
+    headers = {
+        "accept": "application/json",
+        "Authorization": "Bearer " + api_key,
+        "Accept": "application/json",
+    }
+    client = client if client is not None else httpx.AsyncClient()
+    if semaphore is not None:
+        async with semaphore:
+            return await client.post(
+                snipe_url + endpoint, headers=headers, json=data, timeout=timeout
+            )
+    return await client.post(
+        snipe_url + endpoint, headers=headers, json=data, timeout=timeout
+    )
+
+
 def login_required(f):
     """
     Decorate routes to require login.
