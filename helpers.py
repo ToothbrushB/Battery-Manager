@@ -9,6 +9,7 @@ from models import *
 import msgspec
 import pythonping
 from preferences import get_preference
+import rq
 from datetime import timedelta
 timeout = httpx.Timeout(30.0, connect=5.0)
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
@@ -221,4 +222,6 @@ def ping():
         else:
             kv_entry.value = str(output.rtt_avg_ms if output.success(2) else -1)
         session.commit()
+    if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
+        engine.dispose()
     return output.rtt_avg_ms if output.success(2) else None

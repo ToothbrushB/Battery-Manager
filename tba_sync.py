@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 from datetime import datetime
+import rq
 import sqlalchemy
 from sqlalchemy.orm import Session
 from models import Base, EventDb, MatchDb, KVStoreDb
@@ -46,6 +47,16 @@ def download_match_updates():
 
         session.commit()
 
+    if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
+        with sqlalchemy.orm.Session(engine) as db_session:
+            kv_entry = db_session.get(KVStoreDb, "last_tba_sync_job_id")
+            if kv_entry is None:
+                kv_entry = KVStoreDb(key="last_tba_sync_job_id", value=rq.get_current_job().id)
+                db_session.add(kv_entry)
+            else:
+                kv_entry.value = rq.get_current_job().id
+            db_session.commit()
+        engine.dispose()
     return {'status': 'success', 'message': f'Updated {len(matches_data)} matches for {event_key}'}
 
 

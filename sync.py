@@ -227,6 +227,17 @@ def download_hardware_changes():
             if db_battery:
                 db_battery.local_modified_at = None
                 existing.sync_status = "remote_uploaded"
+    if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
+        with sqlalchemy.orm.Session(engine) as db_session:
+            kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
+            if kv_entry is None:
+                kv_entry = KVStoreDb(key="last_sync_job_id", value=rq.get_current_job().id)
+                db_session.add(kv_entry)
+            else:
+                kv_entry.value = rq.get_current_job().id
+            db_session.commit()
+        engine.dispose()
+
 
         
 if __name__ == "__main__":
