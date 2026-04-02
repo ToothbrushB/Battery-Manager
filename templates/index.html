@@ -8,6 +8,15 @@ Home
 <div>
     <h1>Battery Manager Home</h1>
 
+    
+    <div class="container">
+        <h2 class="me-3">Batteries Assigned to Matches</h2>
+        <div id="assignedBatteriesContainer">
+            <p class="text-muted" id="assignedBatteriesEmpty">Loading assigned batteries...</p>
+            <ul class="list-group" id="assignedBatteriesList" style="display:none"></ul>
+        </div>
+    </div>
+
     <div class="container">
         <h2 class="me-3">Recommended Batteries</h2>
         <div class="row">
@@ -25,70 +34,86 @@ Home
             {% endfor %}
         </div>
     </div>
-    <div class="container">
-        <h2 class="me-3">Battery Statuses</h2>
-        <table class="table">
-            <thead>
-                <th scope="col">Tag</th>
-                <th scope="col">Status</th>
-                <th scope="col">Resistance</th>
-            </thead>
-            <tr>
-                <th scope="row">000035</th>
-                <td><span class="badge text-bg-success">Charging 10hrs</span><i class="bi bi-battery-charging"></i></td>
-                <td>0.020</td>
-            </tr>
-            <tr>
-                <th scope="row">000472</th>
-                <td>74%</td>
-                <td>0.020</td>
-            </tr>
-            <tr>
-                <th scope="row">047294</th>
-                <td>25%</td>
-                <td>0.018</td>
-            </tr>
-            <tr>
-                <th scope="row">003458</th>
-                <td>10%</td>
-                <td>0.030</td>
-            </tr>
-            <tr>
-                <th scope="row">672935</th>
-                <td>23%</td>
-                <td>0.015</td>
-            </tr>
-            <tr>
-                <th scope="row">004628</th>
-                <td>85%</td>
-                <td>0.018</td>
-            </tr>
-            <tr>
-                <th scope="row">000874</th>
-                <td>90%</td>
-                <td>0.015</td>
-            </tr>
-            <tr>
-                <th scope="row">000046</th>
-                <td>100%</td>
-                <td>0.022</td>
-            </tr>
-            <tr>
-                <th scope="row">000003</th>
-                <td>50%</td>
-                <td>0.040</td>
-            </tr>
-            <tr>
-                <th scope="row">000862</th>
-                <td>90%</td>
-                <td>0.012</td>
-            </tr>
-            <tr>
-                <th scope="row">000365</th>
-                <td>120%</td>
-                <td>0.015</td>
-            </tr>
-        </table>
-    </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+// Fetch TBA matches and list assigned batteries on the homepage
+function formatAssignedMatchLabel(match) {
+    if (!match) return 'Unknown match';
+    const levelMap = { qm: 'Qual', ef: 'EF', qf: 'QF', sf: 'SF', f: 'Final' };
+    const level = levelMap[match.comp_level] || (match.comp_level ? match.comp_level.toUpperCase() : 'Match');
+    if (match.comp_level === 'qm') return `${level} ${match.match_number ?? ''}`.trim();
+    if (match.set_number != null && match.match_number != null) return `${level} ${match.set_number}-${match.match_number}`;
+    if (match.match_number != null) return `${level} ${match.match_number}`;
+    return match.key || 'Unknown match';
+}
+
+async function loadAssignedBatteries() {
+    const listEl = document.getElementById('assignedBatteriesList');
+    const emptyEl = document.getElementById('assignedBatteriesEmpty');
+    try {
+        const resp = await fetch('/api/tba/matches');
+        if (!resp.ok) {
+            emptyEl.innerText = 'No assigned matches available. Click Load Matches to cache matches.';
+            return;
+        }
+        const data = await resp.json();
+        const matches = data.matches || [];
+        const batteryMap = new Map();
+        matches.forEach(m => {
+            if (m.assigned_battery) {
+                const b = m.assigned_battery;
+                const existing = batteryMap.get(b.id) || { battery: b, matches: [] };
+                existing.matches.push(formatAssignedMatchLabel(m));
+                batteryMap.set(b.id, existing);
+            }
+        });
+
+        if (batteryMap.size === 0) {
+            emptyEl.innerText = 'No batteries are currently assigned to matches.';
+            return;
+        }
+
+        listEl.innerHTML = '';
+        batteryMap.forEach((val, id) => {
+            const li = document.createElement('li');
+            li.className = 'list-group-item d-flex justify-content-between align-items-center';
+            const left = document.createElement('div');
+            left.innerHTML = `<strong>${val.battery.name || ''}</strong> <small class="text-muted">${val.battery.asset_tag || ''}</small><br><small class="text-muted">Assigned to: ${val.matches.join(', ')}</small>`;
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-primary';
+            btn.type = 'button';
+            btn.innerText = 'Info';
+            btn.addEventListener('click', () => {
+                if (typeof showBatteryInfoModal === 'function') {
+                    showBatteryInfoModal(id);
+                } else {
+                    // fallback: open battery modal if available
+                    const el = document.querySelector(`button[data-battery-id="${id}"]`);
+                    if (el) el.click();
+                }
+            });
+            btn.setAttribute('data-bs-toggle', 'modal');
+            btn.setAttribute('data-bs-target', '#batteryModal');
+            btn.setAttribute('data-battery-id', id);
+            li.appendChild(left);
+            li.appendChild(btn);
+            listEl.appendChild(li);
+        });
+        emptyEl.style.display = 'none';
+        listEl.style.display = '';
+    } catch (err) {
+        emptyEl.innerText = 'Error loading assigned batteries.';
+        console.error(err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadAssignedBatteries();
+    // Re-load list when matches are updated elsewhere (e.g., Load Matches page)
+    document.addEventListener('matchesUpdated', () => loadAssignedBatteries());
+});
+</script>
 {% endblock %}

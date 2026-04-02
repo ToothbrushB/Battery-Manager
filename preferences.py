@@ -46,6 +46,22 @@ def get_allowed_checkout_assets() -> list[dict[str, str]]:
     return assets
 
 
+def get_hidden_asset_ids() -> set[int]:
+    """Parse hidden battery asset IDs from preference storage."""
+
+    raw = get_preference("hidden-asset-ids") or ""
+    hidden_ids: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            hidden_ids.add(int(token))
+        except ValueError:
+            continue
+    return hidden_ids
+
+
 def set_preference(key: str, value: str) -> None:
     """
     Set a preference value. Creates the preference if it doesn't exist,
@@ -74,18 +90,26 @@ def load_settings_from_config(config_path: str = "config.json") -> None:
     """
     config = json.load(open(config_path))
     
+    default_mappings = [
+FieldMappingDb(
+                name="Battery Usage Type",
+                db_column_name="",
+            ),
+            FieldMappingDb(
+                name="Battery Voltage Curve",
+                db_column_name="",
+            ),
+            FieldMappingDb(
+                name="Battery Cycle Count",
+                db_column_name="",
+            )
+    ]
     with sqlalchemy.orm.Session(engine) as session:
         # Initialize field mappings if they don't exist
         existing_mappings = session.query(FieldMappingDb).all()
-        if len(existing_mappings) == 0:
-            session.add(FieldMappingDb(
-                name="Battery Usage Type",
-                db_column_name="",
-            ))
-            session.add(FieldMappingDb(
-                name="Battery Voltage Curve",
-                db_column_name="",
-            ))
+        for default in default_mappings:
+            if not any(m.name == default.name for m in existing_mappings):
+                session.add(default)
         
         # Initialize preferences from config
         existing_settings = session.query(PreferenceDb).all()

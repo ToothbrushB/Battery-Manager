@@ -4,6 +4,75 @@ let currentMatches = [];
 let currentMatchForAssignment = null;
 let currentEventKey = window.initialEventKey || '';
 
+
+// --- Highlighting logic for team matches ---
+function normalizeTeamKey(key) {
+    if (!key && key !== 0) return '';
+    return key.toString().trim().replace(/^frc/i, '').toLowerCase();
+}
+
+function parseTeamKeys(teamKeyStr) {
+    if (!teamKeyStr) return [];
+    return teamKeyStr
+        .split(',')
+        .map(normalizeTeamKey)
+        .filter(Boolean);
+}
+
+function extractAllianceTeams(match) {
+    if (!match) return { red: [], blue: [] };
+
+    if (match.red_alliance || match.blue_alliance) {
+        return {
+            red: match.red_alliance || [],
+            blue: match.blue_alliance || [],
+        };
+    }
+
+    if (match.alliances) {
+        const redRaw = match.alliances.red?.team_keys || match.alliances.red || [];
+        const blueRaw = match.alliances.blue?.team_keys || match.alliances.blue || [];
+        return { red: redRaw, blue: blueRaw };
+    }
+
+    return { red: [], blue: [] };
+}
+
+function matchHasTeam(match, teamKeys) {
+    if (!match || !teamKeys.length) return false;
+    const { red, blue } = extractAllianceTeams(match);
+    if (!red.length && !blue.length) return false;
+
+    const redNormalized = red.map(normalizeTeamKey);
+    const blueNormalized = blue.map(normalizeTeamKey);
+    return teamKeys.some(key => redNormalized.includes(key) || blueNormalized.includes(key));
+}
+
+function highlightTeamMatches() {
+    const teamKeys = parseTeamKeys(window.initialTeamKey);
+    if (!teamKeys.length) return;
+
+    const matchesRef = (currentMatches && currentMatches.length)
+        ? currentMatches
+        : (window.initialMatches || []);
+    if (!matchesRef.length) return;
+
+    ["upcomingMatchesBody", "completedMatchesBody", "allMatchesBody"].forEach(bodyId => {
+        const tbody = document.getElementById(bodyId);
+        if (!tbody) return;
+        for (const row of tbody.rows) {
+            const idx = row.dataset.matchIdx;
+            if (idx === undefined) continue;
+            const match = matchesRef[Number(idx)];
+            if (matchHasTeam(match, teamKeys)) {
+                row.classList.add('table-warning');
+            } else {
+                row.classList.remove('table-warning');
+            }
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     // Render initial server-side data
     if (window.initialMatches && window.initialMatches.length > 0) {
@@ -16,56 +85,14 @@ document.addEventListener('DOMContentLoaded', function () {
         updateSyncInfo(window.initialLastSyncedAt);
     }
 
-    document.getElementById('manualEntryToggle').addEventListener('change', toggleManualEntry);
-    document.getElementById('fetchEventsBtn').addEventListener('click', fetchTeamEvents);
     document.getElementById('loadMatchesBtn').addEventListener('click', () => loadMatchesFromApi());
     document.getElementById('tbaSyncBtn').addEventListener('click', triggerTbaSync);
     document.getElementById('confirmAssignBtn').addEventListener('click', confirmBatteryAssignment);
+
+    // Highlight after initial render
+    setTimeout(highlightTeamMatches, 300);
 });
 
-function toggleManualEntry() {
-    const manual = document.getElementById('manualEntryToggle').checked;
-    document.getElementById('eventDropdownSection').classList.toggle('d-none', manual);
-    document.getElementById('eventManualSection').classList.toggle('d-none', !manual);
-}
-
-async function fetchTeamEvents() {
-    const teamKey = document.getElementById('teamKeyInput').value.trim();
-    const year = document.getElementById('yearInput').value;
-    if (!teamKey) {
-        showToast('Please enter a team key (e.g. frc254)', 'Team Key Required', 'error');
-        return;
-    }
-    const btn = document.getElementById('fetchEventsBtn');
-    const spinner = document.getElementById('fetchEventsSpinner');
-    btn.disabled = true;
-    spinner.classList.remove('d-none');
-    try {
-        const resp = await fetch(`/api/tba/events?team_key=${encodeURIComponent(teamKey)}&year=${encodeURIComponent(year)}`);
-        const data = await resp.json();
-        if (!resp.ok) {
-            showToast(data.message || 'Failed to fetch events', 'Error', 'error');
-            return;
-        }
-        const select = document.getElementById('eventSelect');
-        select.innerHTML = '<option value="">-- Select an event --</option>';
-        data.forEach(event => {
-            const opt = document.createElement('option');
-            opt.value = event.key;
-            opt.text = `${event.name} (${event.key})`;
-            if (event.key === currentEventKey) opt.selected = true;
-            select.appendChild(opt);
-        });
-        if (data.length === 0) {
-            showToast('No events found for this team/year.', 'No Events', 'info');
-        }
-    } catch (err) {
-        showToast(`Error fetching events: ${err.message}`, 'Error', 'error');
-    } finally {
-        btn.disabled = false;
-        spinner.classList.add('d-none');
-    }
-}
 
 async function loadMatchesFromApi(eventKeyOverride) {
     let eventKey = eventKeyOverride;
@@ -152,10 +179,44 @@ function makeAssignBtn(match) {
     return btn;
 }
 
+function makeBatteryModalBtn(match) {
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-sm btn-outline-info d-flex align-items-center gap-1';
+    const icon = document.createElement('i');
+    icon.className = 'bi bi-info-circle';
+    btn.appendChild(icon);
+    const textSpan = document.createElement('span');
+    textSpan.textContent = 'Battery';
+    btn.appendChild(textSpan);
+
+    const batteryId = match?.assigned_battery?.id;
+    if (batteryId) {
+        btn.addEventListener('click', () => {
+                if (typeof showBatteryInfoModal === 'function') {
+                    showBatteryInfoModal(batteryId);
+                } else {
+                    // fallback: open battery modal if available
+                    const el = document.querySelector(`button[data-battery-id="${batteryId}"]`);
+                    if (el) el.click();
+                }
+            });
+            btn.setAttribute('data-bs-toggle', 'modal');
+            btn.setAttribute('data-bs-target', '#batteryModal');
+            btn.setAttribute('data-battery-id', batteryId);
+    } else {
+        btn.disabled = true;
+        btn.title = 'No battery assigned';
+    }
+
+    return btn;
+}
+
 // ── Render functions ─────────────────────────────────────────────────────────
 
+
 function renderMatches(matches) {
-    currentMatches = matches;
+    currentMatches = matches || [];
+    window.initialMatches = currentMatches;
 
     const upcoming = matches
         .filter(m => !m.actual_time)
@@ -190,7 +251,12 @@ function renderMatches(matches) {
             <td><span class="badge text-bg-danger">${formatTeams(m.red_alliance)}</span></td>
             <td><span class="badge text-bg-primary">${formatTeams(m.blue_alliance)}</span></td>
             <td>${assignedBatteryCell(m)}</td>
+            <td class="battery-modal-cell"></td>
             <td></td>`;
+        const matchIdx = matches.indexOf(m);
+        if (matchIdx >= 0) tr.dataset.matchIdx = matchIdx;
+        const batteryCell = tr.querySelector('.battery-modal-cell');
+        if (batteryCell) batteryCell.appendChild(makeBatteryModalBtn(m));
         tr.querySelector('td:last-child').appendChild(makeAssignBtn(m));
         upcomingBody.appendChild(tr);
     });
@@ -209,7 +275,12 @@ function renderMatches(matches) {
             <td><span class="badge text-bg-primary">${formatTeams(m.blue_alliance)}</span></td>
             <td>${winnerBadge(m.winning_alliance)}</td>
             <td>${assignedBatteryCell(m)}</td>
+            <td class="battery-modal-cell"></td>
             <td></td>`;
+        const matchIdx = matches.indexOf(m);
+        if (matchIdx >= 0) tr.dataset.matchIdx = matchIdx;
+        const batteryCell = tr.querySelector('.battery-modal-cell');
+        if (batteryCell) batteryCell.appendChild(makeBatteryModalBtn(m));
         tr.querySelector('td:last-child').appendChild(makeAssignBtn(m));
         completedBody.appendChild(tr);
     });
@@ -229,12 +300,26 @@ function renderMatches(matches) {
             <td><span class="badge text-bg-primary">${formatTeams(m.blue_alliance)}</span></td>
             <td>${winnerBadge(m.winning_alliance)}</td>
             <td>${assignedBatteryCell(m)}</td>
+            <td class="battery-modal-cell"></td>
             <td></td>`;
+        const batteryCell = tr.querySelector('.battery-modal-cell');
+        if (batteryCell) batteryCell.appendChild(makeBatteryModalBtn(m));
         tr.querySelector('td:last-child').appendChild(makeAssignBtn(m));
+        const matchIdx = matches.indexOf(m);
+        if (matchIdx >= 0) tr.dataset.matchIdx = matchIdx;
         allBody.appendChild(tr);
     });
     document.getElementById('allCount').textContent = matches.length;
     document.getElementById('allEmpty').style.display = matches.length === 0 ? '' : 'none';
+
+    // Highlight after rendering
+    setTimeout(highlightTeamMatches, 100);
+    // Notify other parts of the app that matches were updated
+    try {
+        document.dispatchEvent(new CustomEvent('matchesUpdated', { detail: matches }));
+    } catch (e) {
+        // ignore if dispatch fails
+    }
 }
 
 function updateEmptyState(matches) {

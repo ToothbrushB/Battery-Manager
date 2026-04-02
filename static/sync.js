@@ -85,14 +85,53 @@ function getBatteryAlerts(battery) {
         `)
 }
 
+function setAssignmentMode(mode) {
+    const assetBtn = document.getElementById('assignModeAssetBtn');
+    const locationBtn = document.getElementById('assignModeLocationBtn');
+    const assetSection = document.getElementById('checkoutAssignmentSection');
+    const locationSection = document.getElementById('locationAssignmentSection');
+    const checkoutSelect = document.getElementById('batteryCheckoutSelect');
+    const locationSelect = document.getElementById('batteryLocationSelect');
+    const modeInput = document.getElementById('batteryAssignmentMode');
+
+    if (!assetBtn || !locationBtn || !assetSection || !locationSection || !modeInput) return;
+
+
+    modeInput.value = mode || '';
+
+    const isAsset = mode === 'asset';
+    const isLocation = mode === 'location';
+
+    assetBtn.classList.toggle('active', isAsset);
+    assetBtn.classList.toggle('btn-primary', isAsset);
+    assetBtn.classList.toggle('btn-outline-primary', !isAsset);
+
+    locationBtn.classList.toggle('active', isLocation);
+    locationBtn.classList.toggle('btn-primary', isLocation);
+    locationBtn.classList.toggle('btn-outline-primary', !isLocation);
+
+    assetSection.classList.toggle('d-none', !isAsset);
+    locationSection.classList.toggle('d-none', !isLocation);
+
+    if (checkoutSelect) {
+        checkoutSelect.disabled = !isAsset || checkoutSelect.options.length <= 1;
+        if (!isAsset) checkoutSelect.value = '';
+    }
+    if (locationSelect) {
+        locationSelect.disabled = !isLocation;
+    }
+}
+
 // create battery info modal
 function showBatteryInfoModal(batteryId) {
-    let chartConfig = {};
-    let chart;
+    let chartConfig = null;
+    let chart = null;
+    let originalCheckedOutAssetId = null;
     fetch(`/api/battery/${batteryId}`).then(response => response.json()).then(data => {
         document.getElementById("batteryModalAlerts").innerHTML = getBatteryAlerts(data).join('\n');
         document.getElementById('batteryModalAssetTag').innerText = data.asset_tag || 'N/A';
         document.getElementById('batteryModalPurchaseDate').innerText = data.purchased_date || 'N/A';
+        document.getElementById('batteryModalLocation').innerText = data.location ? data.location.name : 'N/A';
         document.querySelector('#batteryModal .modal-title').innerText = data.name;
         document.getElementById('batteryModalCustomFields').innerHTML = '';
         for (const [name, field] of Object.entries(data.custom_fields)) { // convert object to iterable with array destructuring 
@@ -150,11 +189,11 @@ function showBatteryInfoModal(batteryId) {
 
         const data2 = d3.csvParseRows(data.custom_fields['Battery Drain Curve'].value, function(d, i) {
             return {
-            time: +d[0],
+            // time: +d[0],
             voltage: +d[1], // Convert strings to numbers securely
-            current: +d[2],
+            // current: +d[2],
             capacity: +d[3],
-            temperature: +d[4]
+            // temperature: +d[4]
             };
         });
 
@@ -165,7 +204,8 @@ function showBatteryInfoModal(batteryId) {
                     datasets: [{
                         data: data2,
                         label: 'Battery Discharge',
-                        tension: 0.1
+                        tension: 0.1,
+                        pointRadius: 0
                     }],
                 },
                 options: {
@@ -207,11 +247,40 @@ function showBatteryInfoModal(batteryId) {
             };
         }
         let chartCanvas = document.getElementById('batteryModalChart');
+        if (chartCanvas) {
+            // If a Chart instance already exists for this canvas, destroy it first
+            try {
+                const existing = Chart.getChart(chartCanvas);
+                if (existing) existing.destroy();
+            } catch (e) {
+                // ignore
+            }
 
-        if (chartConfig) {
-            chart = new Chart(chartCanvas, chartConfig);
-        } else {
-            chartCanvas.parentElement.innerText = "No chart data available.";
+            // Ensure there is a message element to show when no data is available
+            let msgEl = document.getElementById('batteryModalChartMessage');
+            if (!msgEl) {
+                msgEl = document.createElement('div');
+                msgEl.id = 'batteryModalChartMessage';
+                msgEl.className = 'text-muted small text-center mt-2';
+                chartCanvas.parentElement.appendChild(msgEl);
+            }
+
+            // Create chart only if config has datasets
+            if (chartConfig && chartConfig.data && chartConfig.data.datasets && chartConfig.data.datasets.length > 0) {
+                msgEl.innerText = '';
+                chartCanvas.style.display = '';
+                chart = new Chart(chartCanvas, chartConfig);
+            } else {
+                // No data: clear canvas and show friendly message but don't remove the canvas element
+                try {
+                    const ctx = chartCanvas.getContext && chartCanvas.getContext('2d');
+                    if (ctx) ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+                } catch (e) {
+                    // ignore
+                }
+                chartCanvas.style.display = 'none';
+                msgEl.innerText = 'No chart data available.';
+            }
         }
 
         fetch('/api/locations').then(response => response.json()).then(locationsData => {
@@ -233,6 +302,7 @@ function showBatteryInfoModal(batteryId) {
                     const parentOption = document.createElement('option'); // create option for parent location
                     parentOption.value = parentLocation.id;
                     parentOption.text = parentLocation.name;
+
                     parentOption.selected = parentLocation.id === (data.location ? data.location.id : null);
                     optgroup.appendChild(parentOption);
                     locationSelect.appendChild(optgroup);
@@ -251,6 +321,29 @@ function showBatteryInfoModal(batteryId) {
                 option.selected = true;
                 locationSelect.appendChild(option);
             }
+            const selectedLocationId = data.location ? data.location.id : '';
+            locationSelect.value = selectedLocationId ? String(selectedLocationId) : '';
+
+            const assetBtn = document.getElementById('assignModeAssetBtn');
+            const locationBtn = document.getElementById('assignModeLocationBtn');
+            if (assetBtn) {
+                assetBtn.onclick = function () {
+                    setAssignmentMode('asset');
+                };
+            }
+            if (locationBtn) {
+                locationBtn.onclick = function () {
+                    setAssignmentMode('location');
+                };
+            }
+
+            const isCheckedOut = !!(data.checkout_pending_asset_id || data.checked_out_to_asset_id);
+            if (assetBtn) {
+                assetBtn.title = isCheckedOut
+                    ? 'Battery is already checked out. Check in first to assign to another asset.'
+                    : '';
+            }
+            setAssignmentMode(isCheckedOut ? 'location' : 'asset');
         });
 
         fetch('/api/status_labels').then(response => response.json()).then(statusData => {
@@ -275,32 +368,75 @@ function showBatteryInfoModal(batteryId) {
 
         fetch('/api/checkout_targets').then(response => response.json()).then(targets => {
             const checkoutSelect = document.getElementById('batteryCheckoutSelect');
+            const checkoutLockedMessage = document.getElementById('checkoutLockedMessage');
             checkoutSelect.innerHTML = '';
             const placeholder = document.createElement('option');
             placeholder.value = '';
             placeholder.text = targets.length ? 'Select an asset' : 'No allowed assets configured';
             checkoutSelect.appendChild(placeholder);
             const selectedValue = data.checkout_pending_asset_id || data.checked_out_to_asset_id || '';
+            originalCheckedOutAssetId = data.checked_out_to_asset_id || null;
             targets.forEach(target => {
                 const option = document.createElement('option');
                 option.value = target.id;
                 option.text = target.name ? `${target.id} – ${target.name}` : target.id;
+                if (originalCheckedOutAssetId && target.id !== originalCheckedOutAssetId) {
+                    option.disabled = true;
+                }
                 if (target.id === selectedValue) {
                     option.selected = true;
                 }
                 checkoutSelect.appendChild(option);
             });
-            checkoutSelect.disabled = targets.length === 0;
+            if (checkoutLockedMessage) {
+                checkoutLockedMessage.classList.toggle('d-none', !originalCheckedOutAssetId);
+            }
+            const selectedMode = document.getElementById('batteryAssignmentMode')?.value;
+            checkoutSelect.disabled = targets.length === 0 || selectedMode !== 'asset';
         });
     });
 
 
     document.getElementById('batteryModal').addEventListener('hidden.bs.modal', function (event) {
-        chart.destroy();
+        if (chart && typeof chart.destroy === 'function') {
+            try { chart.destroy(); } catch (e) { /* ignore */ }
+        }
+        // restore canvas visibility for next open
+        const chartCanvas = document.getElementById('batteryModalChart');
+        if (chartCanvas) chartCanvas.style.display = '';
     }, { once: true });
     document.querySelector('#batteryUpdateForm > button[type="submit"]').onclick = function (e) {
         e.preventDefault();
         const formData = new FormData(document.getElementById('batteryUpdateForm'));
+        const assignmentMode = document.getElementById('batteryAssignmentMode')?.value;
+
+        if (!assignmentMode) {
+            showToast('Please choose an assignment mode: Asset or Location.', 'Assignment Required', 'error');
+            return;
+        }
+
+        if (assignmentMode === 'asset') {
+            const target = document.getElementById('batteryCheckoutSelect')?.value || '';
+            if (!target) {
+                showToast('Please select an asset to assign.', 'Assignment Required', 'error');
+                return;
+            }
+            if (originalCheckedOutAssetId && target !== originalCheckedOutAssetId) {
+                showToast('Battery is already checked out. Check it in first before assigning a different asset.', 'Checkout Locked', 'error');
+                return;
+            }
+            formData.set('batteryCheckoutTarget', target);
+        } else if (assignmentMode === 'location') {
+            const location = document.getElementById('batteryLocationSelect')?.value || '';
+            if (!location) {
+                showToast('Please select a location.', 'Assignment Required', 'error');
+                return;
+            }
+            formData.set('batteryLocation', location);
+            // Choosing location should check battery in
+            formData.set('batteryCheckoutTarget', '');
+        }
+
         fetch(`/api/battery/${batteryId}`, {
             method: 'PUT',
             body: JSON.stringify(Object.fromEntries(formData)),

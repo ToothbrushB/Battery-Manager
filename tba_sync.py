@@ -18,7 +18,6 @@ def download_match_updates():
         return {'status': 'skipped', 'message': 'No event key configured'}
 
     matches_data = tba.get_event_matches(event_key)
-    print (matches_data)
     if matches_data is None:
         return {'status': 'error', 'message': 'Failed to fetch matches from TBA (using cached data)'}
 

@@ -18,7 +18,12 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from helpers import snipe_it_get, snipe_it_post
 from api import api
-from preferences import get_preference, set_preference, load_settings_from_config
+from preferences import (
+    get_preference,
+    set_preference,
+    load_settings_from_config,
+    get_hidden_asset_ids,
+)
 
 
 # Configure application
@@ -72,15 +77,22 @@ def after_request(response):
 
 @app.route("/")
 def index():
+    hidden_ids = get_hidden_asset_ids()
     with sqlalchemy.orm.Session(engine) as db_session:
-        recommended_batteries = db_session.query(BatteryDb).limit(5).all()
-        return render_template("index.html", recommended_batteries=recommended_batteries)
+        query = db_session.query(BatteryDb)
+        if hidden_ids:
+            query = query.filter(BatteryDb.id.notin_(hidden_ids))
+        recommended_batteries = query.limit(5).all()
+        return render_template("index.html", recommended_batteries=[])
 
 
 @app.route("/list_view", methods=["GET"])
 def list_view():
+    hidden_ids = get_hidden_asset_ids()
     with engine.connect() as connection:
         query = sqlalchemy.select(BatteryDb)
+        if hidden_ids:
+            query = query.where(BatteryDb.id.notin_(hidden_ids))
         result = connection.execute(query).fetchall()
 
     # filter responses based on model id for batteries only
@@ -140,6 +152,15 @@ def history():
     )
 
 
+@app.route("/history/clear", methods=["POST"])
+def clear_history():
+    with sqlalchemy.orm.Session(engine) as db_session:
+        db_session.query(BatteryHistoryDb).delete()
+        db_session.commit()
+    flash("History cleared.", "success")
+    return redirect("/history")
+
+
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     with sqlalchemy.orm.Session(engine) as sql_session:
@@ -149,6 +170,8 @@ def settings():
         )
         existing_statuses = sql_session.query(StatusLabelDb).all()
         existing_mappings = sql_session.query(FieldMappingDb).all()
+        existing_batteries = sql_session.query(BatteryDb).order_by(BatteryDb.name.asc()).all()
+        hidden_asset_ids = get_hidden_asset_ids()
         if request.method == "POST":
             for section in config:
                 for setting in section["settings"]:
@@ -172,6 +195,15 @@ def settings():
                 column = request.form.get(f"special_{mapping.id}")
                 if column and column != mapping.db_column_name:
                     mapping.db_column_name = column
+
+            hidden_assets = request.form.getlist("hidden_assets")
+            normalized_hidden = []
+            for asset_id in hidden_assets:
+                try:
+                    normalized_hidden.append(str(int(asset_id)))
+                except (TypeError, ValueError):
+                    continue
+            set_preference("hidden-asset-ids", ",".join(sorted(set(normalized_hidden), key=int)))
             sql_session.commit()
             flash("Settings updated successfully!", "success")
             return redirect("/settings")
@@ -190,6 +222,8 @@ def settings():
                 locations=existing_locations,
                 statuses=existing_statuses,
                 mappings=existing_mappings,
+                batteries=existing_batteries,
+                hidden_asset_ids=hidden_asset_ids,
             )
 
 

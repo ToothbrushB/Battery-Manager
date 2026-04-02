@@ -7,20 +7,26 @@ List View
 {% block main %}
 <div>
     <h1>Ho Ho Ho! Look at This List</h1>
+    <p class="text-muted" id="listRefreshStatus">Live updates every 5s.</p>
     <table class="table">
         <thead>
-            <th scope="col">Tag</th>
-            <th scope="col">Name</th>
-            <th scope="col">Status</th>
-            <th scope="col">Location</th>
+            <tr>
+                <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="asset_tag">Tag</button></th>
+                <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="name">Name</button></th>
+                <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="status">Status</button></th>
+                <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="location">Location</button></th>
+                <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="checked_out_to_asset_display">Checked Out To</button></th>
+                <th scope="col">Actions</th>
+            </tr>
         </thead>
-        <tbody>
+        <tbody id="batteryListBody">
             {% for battery in batteries %}
             <tr>
                 <td>{{ battery.asset_tag | e }}</td>
                 <td>{{ battery.name | e }}</td>
-                <td>{{ battery.status_label.name | e}}</td>
-                <td>{{ battery.location.name | e }}</td>
+                <td>{{ battery.status_label.name | e if battery.status_label else "" }}</td>
+                <td>{{ battery.location.name | e if battery.location else "" }}</td>
+                <td>{{ battery.checked_out_to_asset_id | e if battery.checked_out_to_asset_id else "" }}</td>
                 <td><button class="btn btn-primary batteryModalButton" data-bs-toggle="modal" data-bs-target="#batteryModal"
                     data-battery-id="{{ battery.id }}">View</button></td>
             </tr>
@@ -28,4 +34,105 @@ List View
         </tbody>
     </table>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+let batteryListData = [];
+let currentSort = { key: 'asset_tag', direction: 'asc' };
+
+function checkedOutDisplayValue(battery) {
+    if (!battery.checked_out_to_asset_id) return '';
+    const name = battery.checked_out_to_asset_name || '';
+    return name ? `${battery.checked_out_to_asset_id} – ${name}` : `${battery.checked_out_to_asset_id}`;
+}
+
+function sortBatteryData(data) {
+    const { key, direction } = currentSort;
+    const multiplier = direction === 'asc' ? 1 : -1;
+    data.sort((a, b) => {
+        const av = (a[key] ?? '').toString().toLowerCase();
+        const bv = (b[key] ?? '').toString().toLowerCase();
+        if (av < bv) return -1 * multiplier;
+        if (av > bv) return 1 * multiplier;
+        return 0;
+    });
+}
+
+function renderBatteryRows() {
+    const tbody = document.getElementById('batteryListBody');
+    if (!tbody) return;
+    const rowsHtml = batteryListData.map(battery => {
+        const status = battery.status || '';
+        const location = battery.location || '';
+        const checkedOut = checkedOutDisplayValue(battery);
+        return `
+            <tr>
+                <td>${battery.asset_tag || ''}</td>
+                <td>${battery.name || ''}</td>
+                <td>${status}</td>
+                <td>${location}</td>
+                <td>${checkedOut}</td>
+                <td><button class="btn btn-primary batteryModalButton" data-bs-toggle="modal" data-bs-target="#batteryModal" data-battery-id="${battery.id}">View</button></td>
+            </tr>
+        `;
+    }).join('');
+    tbody.innerHTML = rowsHtml;
+
+    Array.from(document.getElementsByClassName('batteryModalButton')).forEach(button => {
+        button.addEventListener('click', function () {
+            if (typeof showBatteryInfoModal === 'function') {
+                showBatteryInfoModal(button.getAttribute('data-battery-id'));
+            }
+        });
+    });
+}
+
+async function refreshBatteryList() {
+    const statusEl = document.getElementById('listRefreshStatus');
+    try {
+        const response = await fetch('/api/batteries');
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        batteryListData = (data || []).map(item => ({
+            ...item,
+            checked_out_to_asset_display: checkedOutDisplayValue(item),
+        }));
+        sortBatteryData(batteryListData);
+        renderBatteryRows();
+        if (statusEl) {
+            statusEl.textContent = `Live updates every 5s. Last refreshed: ${new Date().toLocaleTimeString()}`;
+        }
+    } catch (error) {
+        if (statusEl) {
+            statusEl.textContent = `Live updates every 5s. Refresh failed: ${error.message}`;
+        }
+    }
+}
+
+function setupSorting() {
+    document.querySelectorAll('.sort-header').forEach(button => {
+        button.addEventListener('click', () => {
+            const key = button.getAttribute('data-sort-key');
+            if (!key) return;
+            if (currentSort.key === key) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.key = key;
+                currentSort.direction = 'asc';
+            }
+            sortBatteryData(batteryListData);
+            renderBatteryRows();
+        });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    setupSorting();
+    refreshBatteryList();
+    setInterval(refreshBatteryList, 5000);
+});
+</script>
 {% endblock %}

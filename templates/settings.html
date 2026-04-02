@@ -82,7 +82,7 @@ Settings
         <fieldset>
             <legend>Location Configuration</legend>
             <label for="allowed_locations" class="form-label">Allowed Parent Locations</label>
-            <select name="allowed_locations" id="allowed_locations" multiple class="form-select">
+            <select name="allowed_locations" id="allowed_locations" multiple class="form-select" size="5">
                 {% for location in locations %}
                 <option value="{{ location.id }}" {% if location.allowed %}selected{% endif %}>{{ location.name | e }}
                 </option>
@@ -92,9 +92,20 @@ Settings
         <fieldset>
             <legend>Status Configuration</legend>
             <label for="allowed_statuses" class="form-label">Allowed Statuses</label>
-            <select name="allowed_statuses" id="allowed_statuses" multiple class="form-select">
+            <select name="allowed_statuses" id="allowed_statuses" multiple class="form-select" size="5">
                 {% for status in statuses %}
                 <option value="{{ status.id }}" {% if status.allowed %}selected{% endif %}>{{ status.name | e }}
+                </option>
+                {% endfor %}
+            </select>
+        </fieldset>
+        <fieldset>
+            <legend>Hidden Assets</legend>
+            <label for="hidden_assets" class="form-label">Hide selected assets from views</label>
+            <select name="hidden_assets" id="hidden_assets" multiple class="form-select" size="15">
+                {% for battery in batteries %}
+                <option value="{{ battery.id }}" {% if battery.id in hidden_asset_ids %}selected{% endif %}>
+                    {{ battery.name | e }}{% if battery.asset_tag %} ({{ battery.asset_tag | e }}){% endif %}
                 </option>
                 {% endfor %}
             </select>

@@ -7,6 +7,11 @@
         <h1 class="h3 mb-1">Change History</h1>
         <p class="text-muted mb-0">Most recent activity across all batteries. Showing up to 200 entries.</p>
     </div>
+    <form method="post" action="{{ url_for('clear_history') }}" class="ms-3"
+        onsubmit="return confirm('Clear all history entries? This cannot be undone.');">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-outline-danger btn-sm">Clear History</button>
+    </form>
 </div>
 
 <div class="table-responsive border rounded shadow-sm">

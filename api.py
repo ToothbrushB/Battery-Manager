@@ -4,7 +4,6 @@ import sqlalchemy
 from models import *
 from redis import Redis
 from rq import Queue, Repeat
-from rq_scheduler import Scheduler
 from rq import job
 import rq
 import sync
@@ -12,19 +11,84 @@ import tba_sync
 import tba as tba_client
 import netifaces as ni 
 from helpers import ping
-from preferences import get_preference, get_allowed_checkout_assets
+from preferences import get_preference, get_allowed_checkout_assets, get_hidden_asset_ids
 
 redisq = Queue(connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
-scheduler = Scheduler(queue=redisq, connection=redisq.connection)
 api = Blueprint("api", __name__, url_prefix="/api")
 
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
 
-scheduler.schedule(scheduled_time=datetime.now(), func=ping, interval=60, repeat=None, queue_name='default')
-scheduler.schedule(scheduled_time=datetime.now(), func=sync.download_hardware_changes, interval=300, repeat=None, queue_name='default')
-scheduler.schedule(scheduled_time=datetime.now(), func=tba_sync.download_match_updates, interval=300, repeat=None, queue_name='default')
+def ensure_periodic_job(job_id: str, func, interval_seconds: int):
+    """Ensure a single periodic job exists for RQ worker --with-scheduler."""
+
+    try:
+        existing_job = job.Job.fetch(job_id, connection=redisq.connection)
+        if existing_job:
+            status = existing_job.get_status(refresh=False)
+            if status not in {"finished", "failed", "stopped", "canceled"}:
+                return existing_job
+            existing_job.delete()
+            redisq.connection.delete(f"rq:job:{job_id}")
+    except rq.exceptions.NoSuchJobError:
+        existing_job = None
+
+    return redisq.enqueue(
+        func,
+        job_id=job_id,
+        # RQ Repeat requires an integer for `times`; use a very large value
+        # to provide effectively continuous scheduling.
+        repeat=Repeat(times=2_147_483_647, interval=interval_seconds),
+    )
+
+
+ensure_periodic_job("periodic_ping", ping, 5)
+sync_job = ensure_periodic_job("periodic_hardware_sync", sync.download_hardware_changes, 60)
+tba_sync_job = ensure_periodic_job("periodic_tba_sync", tba_sync.download_match_updates, 60)
+with sqlalchemy.orm.Session(engine) as db_session:
+    kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
+    if kv_entry is None:
+        kv_entry = KVStoreDb(key="last_sync_job_id", value=sync_job.id)
+        db_session.add(kv_entry)
+    else:
+        kv_entry.value = sync_job.id
+    kv = db_session.get(KVStoreDb, "last_tba_sync_job_id")
+    if kv is None:
+        db_session.add(KVStoreDb(key="last_tba_sync_job_id", value=tba_sync_job.id))
+    else:
+        kv.value = tba_sync_job.id
+    db_session.commit()
+
+CHECKIN_PENDING_MARKER = "__checkin__"
+
+
+def increment_cycle_count_for_checkout(db_session: sqlalchemy.orm.Session, asset: Asset) -> None:
+    """Increment mapped cycle-count custom field on checkout if configured."""
+
+    mapping = (
+        db_session.query(FieldMappingDb)
+        .filter(FieldMappingDb.name == "Battery Cycle Count")
+        .first()
+    )
+    if mapping is None or not mapping.db_column_name:
+        return
+
+    custom_field = db_session.get(CustomFieldDb, mapping.db_column_name)
+    if custom_field is None or not asset.custom_fields:
+        return
+
+    field_asset = asset.custom_fields.get(custom_field.name)
+    if field_asset is None:
+        return
+
+    raw_value = field_asset.value
+    try:
+        current_count = int(float(str(raw_value).strip())) if raw_value not in (None, "") else 0
+    except (TypeError, ValueError):
+        current_count = 0
+
+    field_asset.value = str(current_count + 1)
 
 @api.route("/sync", methods=["POST", "GET"])
 def trigger_sync():
@@ -119,10 +183,10 @@ def get_battery_info(battery_id):
                 return jsonify({"message": "Battery not found", "status": "error"}), 404
             # Update fields
             unpacked = msgspec.msgpack.decode(result.remote_data, type=Asset)
-            if data["batteryLocation"] is not None and data["batteryLocation"] != "":
+            if "batteryLocation" in data and data["batteryLocation"]:
                 try:
                     result.location = int(data["batteryLocation"])
-                    unpacked.location = Location(int(data["batteryLocation"]))
+                    unpacked.location = msgspec.msgpack.decode(db_session.get(LocationDb, int(data["batteryLocation"])).remote_data, type=Location)
                 except ValueError:
                     return jsonify({"message": "Invalid location ID", "status": "error"}), 400
             if data["batteryStatusSelect"] is not None and data["batteryStatusSelect"] != "":
@@ -147,7 +211,17 @@ def get_battery_info(battery_id):
             checkout_target = data.get("batteryCheckoutTarget")
             if checkout_target == "":
                 checkout_target = None
+            if (
+                checkout_target
+                and result.checked_out_to_asset_id
+                and checkout_target != result.checked_out_to_asset_id
+            ):
+                return jsonify({
+                    "message": "Battery is already checked out to another asset. Check it in first before assigning a different asset.",
+                    "status": "error",
+                }), 409
             if checkout_target and checkout_target != result.checked_out_to_asset_id:
+                increment_cycle_count_for_checkout(db_session, unpacked)
                 result.checked_out_to_asset_id = checkout_target
                 result.checkout_pending_asset_id = checkout_target
                 try:
@@ -159,7 +233,10 @@ def get_battery_info(battery_id):
                         id=assigned_id, name=None, type="asset"
                     )
             elif not checkout_target:
-                result.checkout_pending_asset_id = None
+                was_checked_out = bool(result.checked_out_to_asset_id)
+                result.checked_out_to_asset_id = None
+                result.checkout_pending_asset_id = CHECKIN_PENDING_MARKER if was_checked_out else None
+                unpacked.assigned_to = None
             
             result.remote_data = msgspec.msgpack.encode(unpacked)
             result.sync_status = "local_updated"
@@ -273,6 +350,12 @@ def get_status():
 @api.route("/batteries", methods=["GET"])
 def get_batteries():
     """Retrieve batteries filtered by allowed statuses and locations."""
+    hidden_asset_ids = get_hidden_asset_ids()
+    checkout_asset_names = {
+        str(item.get("id")): item.get("name", "")
+        for item in get_allowed_checkout_assets()
+        if item.get("id")
+    }
     with sqlalchemy.orm.Session(engine) as db_session:
         allowed_status_ids = {s.id for s in db_session.query(StatusLabelDb).filter_by(allowed=True).all()}
         allowed_parent_ids = {l.id for l in db_session.query(LocationDb).filter_by(allowed=True).all()}
@@ -284,6 +367,8 @@ def get_batteries():
 
         result = []
         for b in db_session.query(BatteryDb).all():
+            if b.id in hidden_asset_ids:
+                continue
             if not b.remote_data:
                 continue
             asset = msgspec.msgpack.decode(b.remote_data, type=Asset)
@@ -298,6 +383,8 @@ def get_batteries():
                     'asset_tag': b.asset_tag,
                     'status': asset.status_label.name if asset.status_label else None,
                     'location': asset.location.name if asset.location else None,
+                    'checked_out_to_asset_id': b.checked_out_to_asset_id,
+                    'checked_out_to_asset_name': checkout_asset_names.get(str(b.checked_out_to_asset_id), None) if b.checked_out_to_asset_id else None,
                 })
         return jsonify(result)
 

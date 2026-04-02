@@ -17,36 +17,6 @@
     <div class="card mb-4">
         <div class="card-header fw-bold">Event Selection</div>
         <div class="card-body">
-            <div class="row g-3 align-items-end">
-                <div class="col-md-3">
-                    <label for="teamKeyInput" class="form-label">Team Key</label>
-                    <input type="text" class="form-control" id="teamKeyInput"
-                        placeholder="e.g. frc254" value="{{ team_key }}">
-                </div>
-                <div class="col-md-2">
-                    <label for="yearInput" class="form-label">Year</label>
-                    <input type="number" class="form-control" id="yearInput"
-                        value="{{ current_year }}" min="1992" max="2035">
-                </div>
-                <div class="col-md-4">
-                    <label class="form-label">Event</label>
-                    <div id="eventDropdownSection">
-                        <select class="form-select" id="eventSelect">
-                            <option value="">-- Enter team key and click "Load Events" --</option>
-                            {% if event_key %}
-                            <option value="{{ event_key }}" selected>{{ event_key }}</option>
-                            {% endif %}
-                        </select>
-                    </div>
-                    <div id="eventManualSection" class="d-none">
-                        <input type="text" class="form-control" id="eventKeyManual"
-                            placeholder="e.g. 2026casd" value="{{ event_key }}">
-                    </div>
-                    <div class="form-check mt-1">
-                        <input type="checkbox" class="form-check-input" id="manualEntryToggle">
-                        <label class="form-check-label" for="manualEntryToggle">Enter event key manually</label>
-                    </div>
-                </div>
                 <div class="col-md-3">
                     <div class="d-grid gap-2">
                         <button class="btn btn-outline-secondary" id="fetchEventsBtn">
@@ -112,6 +82,7 @@
                             <th>Red Alliance</th>
                             <th>Blue Alliance</th>
                             <th>Assigned Battery</th>
+                            <th>Battery Modal</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -133,6 +104,7 @@
                             <th>Blue Alliance</th>
                             <th>Winner</th>
                             <th>Assigned Battery</th>
+                            <th>Battery Modal</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -155,6 +127,7 @@
                             <th>Blue Alliance</th>
                             <th>Winner</th>
                             <th>Assigned Battery</th>
+                            <th>Battery Modal</th>
                             <th>Action</th>
                         </tr>
                     </thead>
