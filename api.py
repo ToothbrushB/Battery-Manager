@@ -160,7 +160,7 @@ def reader_info(reader_id):
 @api.route("/battery/<int:battery_id>", methods=["GET", "PUT"])
 def get_battery_info(battery_id):
     """Retrieve battery information by ID"""
-    if request.method == "GET":
+    if request.method == "GET" or request.method == "POST":
         with sqlalchemy.orm.Session(engine) as db_session:
             result = db_session.get(BatteryDb, battery_id)
             

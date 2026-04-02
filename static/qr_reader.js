@@ -3,7 +3,7 @@ let html5QrCode;
 
 const options = {
     fps: 10,    // Optional, frame per seconds for qr code scanning
-    qrbox: { width: 250, height: 250 }  // Optional, if you want bounded box UI
+    // qrbox: { width: 250, height: 250 }  // Optional, if you want bounded box UI
 };
 function handleDecodeSuccess(decodedText, decodedResult) {
     // Handle on success condition with the decoded message.
