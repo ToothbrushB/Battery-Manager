@@ -12,7 +12,7 @@ import sync
 import tba_sync
 import tba as tba_client
 import netifaces as ni 
-from helpers import ping
+from helpers import ping, format_elapsed
 from preferences import get_preference, get_allowed_checkout_assets, get_hidden_asset_ids
 
 redisq = Queue(connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
@@ -98,7 +98,7 @@ def increment_cycle_count_for_checkout(db_session: sqlalchemy.orm.Session, asset
 def trigger_sync():
     """Trigger a sync operation"""
     if request.method == "POST":
-        sync_job = redisq.enqueue(sync.download_hardware_changes)
+        sync_job = ensure_periodic_job("periodic_hardware_sync", sync.download_hardware_changes, 60)
         with sqlalchemy.orm.Session(engine) as db_session:
             kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
             if kv_entry is None:
@@ -349,27 +349,34 @@ def get_status():
             ping_rtt_ms = float(kv_entry.value)
         else:
             ping_rtt_ms = -1.0
+    allOk = ping_rtt_ms >= 0 and (sync_job is not None and sync_job.get_status() in ["finished", "queued", "started"])
     status = {
-            "status": {
-                "name": "Operational",
-                "icon": "check-circle",
-                "network": {
-                    "status": "Online" if ping_rtt_ms >= 0 else "Offline",
-                    "icon": "wifi",
-                    "ip_address": list(get_ip_addresses().values()),
-                    "ping": ping_rtt_ms,
-                },
-                "sync": {
-                    "status": sync_job.get_status() if sync_job is not None else "Unknown",
-                    "icon": "cloud-check",
-                    "last_sync": sync_job.ended_at.isoformat() if sync_job is not None and sync_job.ended_at else "In Progress",
-                },
-            }
+        "status": {
+            "name": "Operational" if allOk else "Problem",
+            "icon": "check-circle" if allOk else "exclamation-triangle",
+            "network": {
+                "status": "Online" if ping_rtt_ms >= 0 else "Offline",
+                "icon": "wifi",
+                "ip_address": list(get_ip_addresses().values()),
+                "ping": ping_rtt_ms,
+            },
+            "sync": {
+                "status": sync_job.get_status() if sync_job is not None else "Unknown",
+                "icon": "cloud-check" if sync_job is not None and sync_job.get_status() in ["finished", "queued", "started"] else "cloud-exclamation",
+                "last_sync": (
+                    format_elapsed(max(0.0, datetime.now().timestamp() - sync_job.ended_at.timestamp()))
+                    if sync_job is not None and getattr(sync_job, "ended_at", None)
+                    else ("In Progress" if sync_job is not None else None)
+                ),
+            },
         }
+    }
     
     return jsonify(
         status
     )
+
+
 
 
 @api.route("/batteries", methods=["GET"])
@@ -382,19 +389,6 @@ def get_batteries():
             return float(value)
         except (TypeError, ValueError):
             return None
-
-    def format_elapsed(seconds: float | None) -> str | None:
-        if seconds is None:
-            return None
-        total = max(0, int(seconds))
-        days, rem = divmod(total, 86400)
-        hours, rem = divmod(rem, 3600)
-        minutes, _ = divmod(rem, 60)
-        if days > 0:
-            return f"{days}d {hours}h"
-        if hours > 0:
-            return f"{hours}h {minutes}m"
-        return f"{minutes}m"
 
     hidden_asset_ids = get_hidden_asset_ids()
     checkout_asset_names = {

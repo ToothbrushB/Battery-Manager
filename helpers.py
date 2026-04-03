@@ -14,6 +14,20 @@ from datetime import timedelta
 timeout = httpx.Timeout(30.0, connect=5.0)
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 
+def format_elapsed(seconds: float | None) -> str | None:
+        if seconds is None:
+            return None
+        total = max(0, int(seconds))
+        days, rem = divmod(total, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, seconds = divmod(rem, 60)
+        if days > 0:
+            return f"{days}d {hours}h"
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        if minutes > 0:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
 
 def snipe_it_get(
     endpoint: str,
@@ -213,15 +227,18 @@ def login_required(f):
 
 
 def ping():
-    output = pythonping.ping(get_preference("snipe-url").split("/")[2].split(":")[0], count=5, timeout=2)
+    try:
+        output = pythonping.ping(get_preference("snipe-url").split("/")[2].split(":")[0], count=5, timeout=2)
+    except RuntimeError:
+        output = None
     with sqlalchemy.orm.Session(engine) as session:
         kv_entry = session.get(KVStoreDb, "ping_rtt_ms")
         if kv_entry is None:
-            kv_entry = KVStoreDb(key="ping_rtt_ms", value=str(output.rtt_avg_ms if output.success(2) else -1))
+            kv_entry = KVStoreDb(key="ping_rtt_ms", value=str(output.rtt_avg_ms if output and output.success(2) else -1))
             session.add(kv_entry)
         else:
-            kv_entry.value = str(output.rtt_avg_ms if output.success(2) else -1)
+            kv_entry.value = str(output.rtt_avg_ms if output and output.success(2) else -1)
         session.commit()
     if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
         engine.dispose()
-    return output.rtt_avg_ms if output.success(2) else None
+    return output.rtt_avg_ms if output and output.success(2) else None

@@ -3,6 +3,7 @@ import subprocess
 from datetime import datetime
 import sqlalchemy
 from models import *
+from helpers import format_elapsed
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
@@ -102,17 +103,6 @@ def after_request(response):
 def index():
     hidden_ids = get_hidden_asset_ids()
     tracked_team_keys = get_preference("tba-team-key") or ""
-
-    def format_elapsed(seconds: float) -> str:
-        seconds = max(0, int(seconds))
-        days, rem = divmod(seconds, 86400)
-        hours, rem = divmod(rem, 3600)
-        minutes, _ = divmod(rem, 60)
-        if days > 0:
-            return f"{days}d {hours}h"
-        if hours > 0:
-            return f"{hours}h {minutes}m"
-        return f"{minutes}m"
 
     with sqlalchemy.orm.Session(engine) as db_session:
         query = db_session.query(BatteryDb)
