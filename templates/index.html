@@ -14,6 +14,22 @@ Home
         <div id="assignedBatteriesContainer">
             <p class="text-muted" id="assignedBatteriesEmpty">Loading assigned batteries...</p>
             <ul class="list-group" id="assignedBatteriesList" style="display:none"></ul>
+            <div class="mt-3" id="completedAssignedSection" style="display:none;">
+                <button
+                    class="btn btn-sm btn-outline-secondary"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#completedAssignedCollapse"
+                    aria-expanded="false"
+                    aria-controls="completedAssignedCollapse"
+                >
+                    Completed Match Assignments
+                </button>
+                <div class="collapse mt-2" id="completedAssignedCollapse">
+                    <p class="text-muted mb-2" id="completedAssignedEmpty">No completed match assignments.</p>
+                    <ul class="list-group" id="completedAssignedBatteriesList" style="display:none"></ul>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -131,108 +147,154 @@ function renderTeamBadgesHtml(badges) {
     }).join('');
 }
 
+function upsertBatteryEntry(targetMap, battery, match, trackedTeamKeys) {
+    const existing = targetMap.get(battery.id) || {
+        battery,
+        matches: [],
+        sortTuple: getMatchSortTuple(match),
+        teamBadges: [],
+    };
+    const matchTuple = getMatchSortTuple(match);
+    existing.matches.push({
+        label: formatAssignedMatchLabel(match),
+        sortTuple: matchTuple,
+    });
+    if (compareSortTuple(matchTuple, existing.sortTuple) < 0) {
+        existing.sortTuple = matchTuple;
+    }
+    existing.teamBadges.push(...trackedTeamBadgesForMatch(match, trackedTeamKeys));
+    targetMap.set(battery.id, existing);
+}
+
+function renderBatteryEntryList(listEl, entries) {
+    listEl.innerHTML = '';
+    entries.forEach((val) => {
+        const id = val.battery.id;
+        const uniqueBadges = [];
+        const seen = new Set();
+        val.teamBadges.forEach(b => {
+            const key = `${b.team}|${b.alliance}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueBadges.push(b);
+            }
+        });
+
+        const sortedMatches = val.matches
+            .slice()
+            .sort((a, b) => compareSortTuple(a.sortTuple, b.sortTuple))
+            .map(m => m.label);
+
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex justify-content-between align-items-start gap-2';
+        const left = document.createElement('div');
+        left.innerHTML = `
+            <strong>${val.battery.name || ''}</strong>
+            <small class="text-muted">${val.battery.asset_tag || ''}</small>
+            <div class="mt-1">${renderTeamBadgesHtml(uniqueBadges)}</div>
+            <small class="text-muted">Assigned to: ${sortedMatches.join(', ')}</small>
+        `;
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm btn-primary';
+        btn.type = 'button';
+        btn.innerText = 'Info';
+        btn.addEventListener('click', () => {
+            if (typeof showBatteryInfoModal === 'function') {
+                showBatteryInfoModal(id);
+            } else {
+                const el = document.querySelector(`button[data-battery-id="${id}"]`);
+                if (el) el.click();
+            }
+        });
+        btn.setAttribute('data-bs-toggle', 'modal');
+        btn.setAttribute('data-bs-target', '#batteryModal');
+        btn.setAttribute('data-battery-id', id);
+        li.appendChild(left);
+        li.appendChild(btn);
+        listEl.appendChild(li);
+    });
+}
+
 async function loadAssignedBatteries() {
     const listEl = document.getElementById('assignedBatteriesList');
     const emptyEl = document.getElementById('assignedBatteriesEmpty');
+    const completedSection = document.getElementById('completedAssignedSection');
+    const completedListEl = document.getElementById('completedAssignedBatteriesList');
+    const completedEmptyEl = document.getElementById('completedAssignedEmpty');
     const trackedTeamKeys = parseTrackedTeamKeys(trackedTeamKeysRaw);
     try {
         const resp = await fetch('/api/tba/matches');
         if (!resp.ok) {
             emptyEl.innerText = 'No assigned matches available. Click Load Matches to cache matches.';
+            listEl.style.display = 'none';
+            emptyEl.style.display = '';
+            if (completedSection) completedSection.style.display = 'none';
             return;
         }
         const data = await resp.json();
         const matches = (data.matches || []).slice().sort((a, b) =>
             compareSortTuple(getMatchSortTuple(a), getMatchSortTuple(b))
         );
-        const batteryMap = new Map();
+        const activeBatteryMap = new Map();
+        const completedBatteryMap = new Map();
         matches.forEach(m => {
             const assignedBatteries = (m.assigned_batteries && m.assigned_batteries.length)
                 ? m.assigned_batteries
                 : (m.assigned_battery ? [m.assigned_battery] : []);
+            const isCompleted = !!m.winning_alliance;
 
             assignedBatteries.forEach(b => {
-                const existing = batteryMap.get(b.id) || {
-                    battery: b,
-                    matches: [],
-                    sortTuple: getMatchSortTuple(m),
-                    teamBadges: [],
-                };
-                existing.matches.push({
-                    label: formatAssignedMatchLabel(m),
-                    sortTuple: getMatchSortTuple(m),
-                });
-                if (compareSortTuple(getMatchSortTuple(m), existing.sortTuple) < 0) {
-                    existing.sortTuple = getMatchSortTuple(m);
+                if (isCompleted) {
+                    upsertBatteryEntry(completedBatteryMap, b, m, trackedTeamKeys);
+                } else {
+                    upsertBatteryEntry(activeBatteryMap, b, m, trackedTeamKeys);
                 }
-                existing.teamBadges.push(...trackedTeamBadgesForMatch(m, trackedTeamKeys));
-                batteryMap.set(b.id, existing);
             });
         });
 
-        if (batteryMap.size === 0) {
+        if (activeBatteryMap.size === 0 && completedBatteryMap.size === 0) {
             emptyEl.innerText = 'No batteries are currently assigned to matches.';
             listEl.style.display = 'none';
             emptyEl.style.display = '';
+            if (completedSection) completedSection.style.display = 'none';
             return;
         }
 
-        const batteryEntries = Array.from(batteryMap.values()).sort((a, b) =>
+        const activeEntries = Array.from(activeBatteryMap.values()).sort((a, b) =>
+            compareSortTuple(a.sortTuple, b.sortTuple)
+        );
+        const completedEntries = Array.from(completedBatteryMap.values()).sort((a, b) =>
             compareSortTuple(a.sortTuple, b.sortTuple)
         );
 
-        listEl.innerHTML = '';
-        batteryEntries.forEach((val) => {
-            const id = val.battery.id;
-            const uniqueBadges = [];
-            const seen = new Set();
-            val.teamBadges.forEach(b => {
-                const key = `${b.team}|${b.alliance}`;
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    uniqueBadges.push(b);
-                }
-            });
-            const sortedMatches = val.matches
-                .slice()
-                .sort((a, b) => compareSortTuple(a.sortTuple, b.sortTuple))
-                .map(m => m.label);
+        if (activeEntries.length) {
+            renderBatteryEntryList(listEl, activeEntries);
+            emptyEl.style.display = 'none';
+            listEl.style.display = '';
+        } else {
+            emptyEl.innerText = 'No active assigned batteries. See completed assignments below.';
+            emptyEl.style.display = '';
+            listEl.style.display = 'none';
+        }
 
-            const li = document.createElement('li');
-            li.className = 'list-group-item d-flex justify-content-between align-items-start gap-2';
-            const left = document.createElement('div');
-            left.innerHTML = `
-                <strong>${val.battery.name || ''}</strong>
-                <small class="text-muted">${val.battery.asset_tag || ''}</small>
-                <div class="mt-1">${renderTeamBadgesHtml(uniqueBadges)}</div>
-                <small class="text-muted">Assigned to: ${sortedMatches.join(', ')}</small>
-            `;
-            const btn = document.createElement('button');
-            btn.className = 'btn btn-sm btn-primary';
-            btn.type = 'button';
-            btn.innerText = 'Info';
-            btn.addEventListener('click', () => {
-                if (typeof showBatteryInfoModal === 'function') {
-                    showBatteryInfoModal(id);
-                } else {
-                    // fallback: open battery modal if available
-                    const el = document.querySelector(`button[data-battery-id="${id}"]`);
-                    if (el) el.click();
-                }
-            });
-            btn.setAttribute('data-bs-toggle', 'modal');
-            btn.setAttribute('data-bs-target', '#batteryModal');
-            btn.setAttribute('data-battery-id', id);
-            li.appendChild(left);
-            li.appendChild(btn);
-            listEl.appendChild(li);
-        });
-        emptyEl.style.display = 'none';
-        listEl.style.display = '';
+        if (completedSection) {
+            completedSection.style.display = completedEntries.length ? '' : 'none';
+        }
+        if (completedListEl && completedEmptyEl) {
+            if (completedEntries.length) {
+                renderBatteryEntryList(completedListEl, completedEntries);
+                completedListEl.style.display = '';
+                completedEmptyEl.style.display = 'none';
+            } else {
+                completedListEl.style.display = 'none';
+                completedEmptyEl.style.display = '';
+            }
+        }
     } catch (err) {
         emptyEl.innerText = 'Error loading assigned batteries.';
         emptyEl.style.display = '';
         listEl.style.display = 'none';
+        if (completedSection) completedSection.style.display = 'none';
         console.error(err);
     }
 }
