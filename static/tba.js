@@ -3,6 +3,7 @@
 let currentMatches = [];
 let currentMatchForAssignment = null;
 let currentEventKey = window.initialEventKey || '';
+let allAssignableBatteries = [];
 
 
 // --- Highlighting logic for team matches ---
@@ -165,8 +166,28 @@ function winnerBadge(winner) {
 }
 
 function assignedBatteryCell(match) {
-    if (match.assigned_battery) {
-        return `${match.assigned_battery.name || ''} <span class="text-muted small">${match.assigned_battery.asset_tag || ''}</span>`;
+    const assigned = (match.assigned_batteries && match.assigned_batteries.length)
+        ? match.assigned_batteries
+        : (match.assigned_battery ? [match.assigned_battery] : []);
+    if (assigned.length) {
+        return assigned
+            .map((b, idx) => {
+                const name = b.name || 'Unnamed Battery';
+                const tag = b.asset_tag || '';
+                const separator = assigned.length > 1 && idx > 0 ? 'mt-1' : '';
+                return `
+                    <button
+                        type="button"
+                        class="btn btn-link p-0 text-start text-decoration-none assigned-battery-link ${separator}"
+                        data-bs-toggle="modal"
+                        data-bs-target="#batteryModal"
+                        data-battery-id="${b.id}"
+                    >
+                        ${name} <span class="text-muted small">${tag}</span>
+                    </button>
+                `;
+            })
+            .join('<br>');
     }
     return '<span class="text-muted fst-italic">None</span>';
 }
@@ -176,38 +197,6 @@ function makeAssignBtn(match) {
     btn.className = 'btn btn-sm btn-outline-secondary';
     btn.textContent = 'Assign';
     btn.addEventListener('click', () => openAssignmentModal(match));
-    return btn;
-}
-
-function makeBatteryModalBtn(match) {
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-sm btn-outline-info d-flex align-items-center gap-1';
-    const icon = document.createElement('i');
-    icon.className = 'bi bi-info-circle';
-    btn.appendChild(icon);
-    const textSpan = document.createElement('span');
-    textSpan.textContent = 'Battery';
-    btn.appendChild(textSpan);
-
-    const batteryId = match?.assigned_battery?.id;
-    if (batteryId) {
-        btn.addEventListener('click', () => {
-                if (typeof showBatteryInfoModal === 'function') {
-                    showBatteryInfoModal(batteryId);
-                } else {
-                    // fallback: open battery modal if available
-                    const el = document.querySelector(`button[data-battery-id="${batteryId}"]`);
-                    if (el) el.click();
-                }
-            });
-            btn.setAttribute('data-bs-toggle', 'modal');
-            btn.setAttribute('data-bs-target', '#batteryModal');
-            btn.setAttribute('data-battery-id', batteryId);
-    } else {
-        btn.disabled = true;
-        btn.title = 'No battery assigned';
-    }
-
     return btn;
 }
 
@@ -251,12 +240,9 @@ function renderMatches(matches) {
             <td><span class="badge text-bg-danger">${formatTeams(m.red_alliance)}</span></td>
             <td><span class="badge text-bg-primary">${formatTeams(m.blue_alliance)}</span></td>
             <td>${assignedBatteryCell(m)}</td>
-            <td class="battery-modal-cell"></td>
             <td></td>`;
         const matchIdx = matches.indexOf(m);
         if (matchIdx >= 0) tr.dataset.matchIdx = matchIdx;
-        const batteryCell = tr.querySelector('.battery-modal-cell');
-        if (batteryCell) batteryCell.appendChild(makeBatteryModalBtn(m));
         tr.querySelector('td:last-child').appendChild(makeAssignBtn(m));
         upcomingBody.appendChild(tr);
     });
@@ -275,12 +261,9 @@ function renderMatches(matches) {
             <td><span class="badge text-bg-primary">${formatTeams(m.blue_alliance)}</span></td>
             <td>${winnerBadge(m.winning_alliance)}</td>
             <td>${assignedBatteryCell(m)}</td>
-            <td class="battery-modal-cell"></td>
             <td></td>`;
         const matchIdx = matches.indexOf(m);
         if (matchIdx >= 0) tr.dataset.matchIdx = matchIdx;
-        const batteryCell = tr.querySelector('.battery-modal-cell');
-        if (batteryCell) batteryCell.appendChild(makeBatteryModalBtn(m));
         tr.querySelector('td:last-child').appendChild(makeAssignBtn(m));
         completedBody.appendChild(tr);
     });
@@ -300,14 +283,19 @@ function renderMatches(matches) {
             <td><span class="badge text-bg-primary">${formatTeams(m.blue_alliance)}</span></td>
             <td>${winnerBadge(m.winning_alliance)}</td>
             <td>${assignedBatteryCell(m)}</td>
-            <td class="battery-modal-cell"></td>
             <td></td>`;
-        const batteryCell = tr.querySelector('.battery-modal-cell');
-        if (batteryCell) batteryCell.appendChild(makeBatteryModalBtn(m));
         tr.querySelector('td:last-child').appendChild(makeAssignBtn(m));
         const matchIdx = matches.indexOf(m);
         if (matchIdx >= 0) tr.dataset.matchIdx = matchIdx;
         allBody.appendChild(tr);
+    });
+
+    document.querySelectorAll('.assigned-battery-link').forEach(button => {
+        button.addEventListener('click', () => {
+            const batteryId = button.getAttribute('data-battery-id');
+            if (!batteryId || typeof showBatteryInfoModal !== 'function') return;
+            showBatteryInfoModal(batteryId);
+        });
     });
     document.getElementById('allCount').textContent = matches.length;
     document.getElementById('allEmpty').style.display = matches.length === 0 ? '' : 'none';
@@ -341,25 +329,110 @@ async function openAssignmentModal(match) {
     document.getElementById('assignModalBlueAlliance').textContent = formatTeams(match.blue_alliance);
     document.getElementById('assignModalTime').textContent = formatTime(match.predicted_time);
 
-    const currentBattery = match.assigned_battery;
+    const currentBatteries = (match.assigned_batteries && match.assigned_batteries.length)
+        ? match.assigned_batteries
+        : (match.assigned_battery ? [match.assigned_battery] : []);
     document.getElementById('assignModalCurrentBattery').textContent =
-        currentBattery ? `${currentBattery.name} (${currentBattery.asset_tag})` : 'None';
+        currentBatteries.length
+            ? currentBatteries.map(b => `${b.name} (${b.asset_tag})`).join(', ')
+            : 'None';
 
-    const select = document.getElementById('batterySelectDropdown');
-    select.innerHTML = '<option value="">-- None (unassign) --</option>';
+    const batterySelectList = document.getElementById('batterySelectList');
+    const multiCheckbox = document.getElementById('enableMultiAssignCheckbox');
+    const addButton = document.getElementById('addBatterySelectBtn');
+    if (!batterySelectList || !multiCheckbox || !addButton) return;
 
-    try {
-        const resp = await fetch('/api/batteries');
-        const batteries = await resp.json();
-        batteries.forEach(b => {
+    function createSelectRow(selectedId = '') {
+        const row = document.createElement('div');
+        row.className = 'input-group battery-select-row';
+
+        const select = document.createElement('select');
+        select.className = 'form-select battery-select';
+        select.innerHTML = '<option value="">-- None (unassign) --</option>';
+        allAssignableBatteries.forEach(b => {
             const opt = document.createElement('option');
-            opt.value = b.id;
+            opt.value = String(b.id);
             const statusPart = b.status ? ` · ${b.status}` : '';
             const locationPart = b.location ? ` @ ${b.location}` : '';
             opt.text = `${b.name} (${b.asset_tag})${statusPart}${locationPart}`;
-            if (currentBattery && b.id === currentBattery.id) opt.selected = true;
+            if (String(selectedId) === String(b.id)) opt.selected = true;
             select.appendChild(opt);
         });
+
+        row.appendChild(select);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'btn btn-outline-danger d-none battery-select-remove';
+        removeBtn.innerHTML = '<i class="bi bi-x-lg"></i>';
+        removeBtn.title = 'Remove battery select';
+        removeBtn.addEventListener('click', () => {
+            row.remove();
+            refreshSelectionState();
+        });
+        row.appendChild(removeBtn);
+
+        select.addEventListener('change', refreshSelectionState);
+        return row;
+    }
+
+    function refreshSelectionState() {
+        const rows = Array.from(batterySelectList.querySelectorAll('.battery-select-row'));
+        const selects = rows.map(r => r.querySelector('.battery-select')).filter(Boolean);
+        const selectedValues = selects.map(s => s.value).filter(Boolean);
+
+        selects.forEach(select => {
+            const currentValue = select.value;
+            Array.from(select.options).forEach(option => {
+                if (!option.value) {
+                    option.disabled = false;
+                    return;
+                }
+                option.disabled = selectedValues.includes(option.value) && option.value !== currentValue;
+            });
+        });
+
+        const isMulti = multiCheckbox.checked;
+        addButton.classList.toggle('d-none', !isMulti);
+        rows.forEach((row, idx) => {
+            const removeBtn = row.querySelector('.battery-select-remove');
+            if (!removeBtn) return;
+            removeBtn.classList.toggle('d-none', !isMulti || rows.length <= 1 || idx === 0);
+        });
+
+        if (!isMulti && rows.length > 1) {
+            const keepValue = selects[0]?.value || '';
+            batterySelectList.innerHTML = '';
+            batterySelectList.appendChild(createSelectRow(keepValue));
+            refreshSelectionState();
+        }
+    }
+
+    addButton.onclick = () => {
+        batterySelectList.appendChild(createSelectRow(''));
+        refreshSelectionState();
+    };
+
+    multiCheckbox.onchange = refreshSelectionState;
+
+    try {
+        const resp = await fetch('/api/batteries');
+        allAssignableBatteries = await resp.json();
+
+        batterySelectList.innerHTML = '';
+        const initialIds = currentBatteries.map(b => String(b.id)).filter(Boolean);
+        const shouldMulti = initialIds.length > 1;
+        multiCheckbox.checked = shouldMulti;
+
+        if (!initialIds.length) {
+            batterySelectList.appendChild(createSelectRow(''));
+        } else if (shouldMulti) {
+            initialIds.forEach(id => batterySelectList.appendChild(createSelectRow(id)));
+        } else {
+            batterySelectList.appendChild(createSelectRow(initialIds[0]));
+        }
+
+        refreshSelectionState();
     } catch (err) {
         showToast('Error loading batteries: ' + err.message, 'Error', 'error');
     }
@@ -370,7 +443,17 @@ async function openAssignmentModal(match) {
 async function confirmBatteryAssignment() {
     if (!currentMatchForAssignment) return;
 
-    const batteryIdRaw = document.getElementById('batterySelectDropdown').value;
+    const multiCheckbox = document.getElementById('enableMultiAssignCheckbox');
+    const selects = Array.from(document.querySelectorAll('#batterySelectList .battery-select'));
+    const selectedValues = selects.map(s => s.value).filter(Boolean);
+    const uniqueSelected = Array.from(new Set(selectedValues));
+    if (uniqueSelected.length !== selectedValues.length) {
+        showToast('Please do not select the same battery twice.', 'Duplicate Selection', 'error');
+        return;
+    }
+
+    const multiAssign = !!multiCheckbox?.checked;
+    const batteryIdRaw = uniqueSelected[0] || '';
     const matchKey = currentMatchForAssignment.key;
 
     try {
@@ -380,6 +463,8 @@ async function confirmBatteryAssignment() {
             body: JSON.stringify({
                 match_key: matchKey,
                 battery_id: batteryIdRaw ? parseInt(batteryIdRaw, 10) : null,
+                battery_ids: uniqueSelected.map(v => parseInt(v, 10)),
+                multi_assign: multiAssign,
             })
         });
         const data = await resp.json();

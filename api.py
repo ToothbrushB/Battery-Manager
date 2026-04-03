@@ -22,6 +22,7 @@ engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
 ensure_battery_history_columns(engine)
+ensure_tba_match_battery_assignment_table(engine)
 
 def ensure_periodic_job(job_id: str, func, interval_seconds: int):
     """Ensure a single periodic job exists for RQ worker --with-scheduler."""
@@ -507,10 +508,29 @@ def get_tba_matches():
         matches = []
         for m in db_session.query(MatchDb).filter_by(event_key=event_key).all():
             d = m.to_dict()
-            if m.assigned_battery_id:
+            assignment_rows = (
+                db_session.query(MatchBatteryAssignmentDb)
+                .filter_by(match_key=m.key)
+                .order_by(MatchBatteryAssignmentDb.sort_order.asc(), MatchBatteryAssignmentDb.id.asc())
+                .all()
+            )
+            assigned_batteries = []
+            for assignment in assignment_rows:
+                battery = db_session.get(BatteryDb, assignment.battery_id)
+                if battery:
+                    assigned_batteries.append(
+                        {"id": battery.id, "name": battery.name, "asset_tag": battery.asset_tag}
+                    )
+
+            if not assigned_batteries and m.assigned_battery_id:
                 battery = db_session.get(BatteryDb, m.assigned_battery_id)
                 if battery:
-                    d['assigned_battery'] = {'id': battery.id, 'name': battery.name, 'asset_tag': battery.asset_tag}
+                    assigned_batteries.append(
+                        {"id": battery.id, "name": battery.name, "asset_tag": battery.asset_tag}
+                    )
+
+            d['assigned_batteries'] = assigned_batteries
+            d['assigned_battery'] = assigned_batteries[0] if assigned_batteries else None
             matches.append(d)
 
         kv = db_session.get(KVStoreDb, 'last_tba_sync_at')
@@ -522,9 +542,11 @@ def get_tba_matches():
 @api.route("/tba/assign_battery", methods=["POST"])
 def assign_battery_to_match():
     """Assign a battery to a match and update the battery notes for Snipe-IT sync."""
-    data = request.json
+    data = request.json or {}
     match_key = data.get('match_key')
     battery_id = data.get('battery_id')
+    multi_assign = bool(data.get('multi_assign'))
+    battery_ids_payload = data.get('battery_ids') if isinstance(data.get('battery_ids'), list) else []
 
     if not match_key:
         return jsonify({"message": "match_key is required", "status": "error"}), 400
@@ -533,32 +555,75 @@ def assign_battery_to_match():
         match = db_session.get(MatchDb, match_key)
         if not match:
             return jsonify({"message": "Match not found", "status": "error"}), 404
+        if multi_assign:
+            selected_ids: list[int] = []
+            seen: set[int] = set()
+            for raw in battery_ids_payload:
+                if raw in (None, ""):
+                    continue
+                try:
+                    battery_int = int(raw)
+                except (TypeError, ValueError):
+                    return jsonify({"message": "Invalid battery id", "status": "error"}), 400
+                if battery_int in seen:
+                    return jsonify({"message": "Duplicate battery selected", "status": "error"}), 400
+                seen.add(battery_int)
+                selected_ids.append(battery_int)
 
-        match.assigned_battery_id = int(battery_id) if battery_id else None
+            db_session.query(MatchBatteryAssignmentDb).filter_by(match_key=match.key).delete()
+            match.assigned_battery_id = selected_ids[0] if selected_ids else None
 
-        if battery_id:
-            battery = db_session.get(BatteryDb, int(battery_id))
-            if not battery:
-                return jsonify({"message": "Battery not found", "status": "error"}), 404
+            for idx, selected_id in enumerate(selected_ids):
+                battery = db_session.get(BatteryDb, selected_id)
+                if not battery:
+                    return jsonify({"message": f"Battery {selected_id} not found", "status": "error"}), 404
+                db_session.add(
+                    MatchBatteryAssignmentDb(
+                        match_key=match.key,
+                        battery_id=selected_id,
+                        sort_order=idx,
+                        created_at=str(datetime.now().timestamp()),
+                    )
+                )
 
-            if battery.remote_data:
-                asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
-                existing_notes = asset.notes or ''
-                # Remove any previous match assignment line then append new one
-                lines = [l for l in existing_notes.split('\n') if not l.startswith('Match: ')]
-                lines.append(f'Match: {match_key}')
-                asset.notes = '\n'.join(lines).strip()
-                # TODO. Need to update battery usage type to "Competition"
-                battery.remote_data = msgspec.msgpack.encode(asset)
+                if battery.remote_data:
+                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
+                    existing_notes = asset.notes or ''
+                    lines = [l for l in existing_notes.split('\n') if not l.startswith('Match: ')]
+                    lines.append(f'Match: {match_key}')
+                    asset.notes = '\n'.join(lines).strip()
+                    battery.remote_data = msgspec.msgpack.encode(asset)
 
-            battery.sync_status = "local_updated"
-            battery.local_modified_at = str(datetime.now().timestamp())
-            record_battery_history(db_session, battery)
+                battery.sync_status = "local_updated"
+                battery.local_modified_at = str(datetime.now().timestamp())
+                record_battery_history(db_session, battery)
+        else:
+            db_session.query(MatchBatteryAssignmentDb).filter_by(match_key=match.key).delete()
+            match.assigned_battery_id = int(battery_id) if battery_id else None
+
+            if battery_id:
+                battery = db_session.get(BatteryDb, int(battery_id))
+                if not battery:
+                    return jsonify({"message": "Battery not found", "status": "error"}), 404
+
+                if battery.remote_data:
+                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
+                    existing_notes = asset.notes or ''
+                    # Remove any previous match assignment line then append new one
+                    lines = [l for l in existing_notes.split('\n') if not l.startswith('Match: ')]
+                    lines.append(f'Match: {match_key}')
+                    asset.notes = '\n'.join(lines).strip()
+                    # TODO. Need to update battery usage type to "Competition"
+                    battery.remote_data = msgspec.msgpack.encode(asset)
+
+                battery.sync_status = "local_updated"
+                battery.local_modified_at = str(datetime.now().timestamp())
+                record_battery_history(db_session, battery)
             
 
         db_session.commit()
 
-    return jsonify({"message": "Battery assigned successfully", "status": "success"}), 200
+    return jsonify({"message": "Battery assignment updated", "status": "success"}), 200
 
 
 @api.route("/tba/sync", methods=["POST", "GET"])

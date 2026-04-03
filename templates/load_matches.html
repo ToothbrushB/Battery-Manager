@@ -82,7 +82,6 @@
                             <th>Red Alliance</th>
                             <th>Blue Alliance</th>
                             <th>Assigned Battery</th>
-                            <th>Battery Modal</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -104,7 +103,6 @@
                             <th>Blue Alliance</th>
                             <th>Winner</th>
                             <th>Assigned Battery</th>
-                            <th>Battery Modal</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -127,7 +125,6 @@
                             <th>Blue Alliance</th>
                             <th>Winner</th>
                             <th>Assigned Battery</th>
-                            <th>Battery Modal</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -163,11 +160,26 @@
                     <strong>Current Assignment:</strong>
                     <span id="assignModalCurrentBattery" class="text-muted fst-italic">None</span>
                 </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" value="1" id="enableMultiAssignCheckbox">
+                    <label class="form-check-label" for="enableMultiAssignCheckbox">
+                        Assign multiple batteries to this match
+                    </label>
+                </div>
                 <div class="mb-3">
-                    <label for="batterySelectDropdown" class="form-label fw-bold">Select Battery</label>
-                    <select class="form-select" id="batterySelectDropdown">
-                        <option value="">-- None (unassign) --</option>
-                    </select>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <label for="batterySelectDropdown" class="form-label fw-bold mb-0">Select Battery</label>
+                        <button type="button" class="btn btn-sm btn-outline-primary d-none" id="addBatterySelectBtn" title="Add another battery select">
+                            <i class="bi bi-plus-lg"></i>
+                        </button>
+                    </div>
+                    <div id="batterySelectList" class="d-grid gap-2">
+                        <div class="input-group battery-select-row">
+                            <select class="form-select battery-select" id="batterySelectDropdown" data-select-index="0">
+                                <option value="">-- None (unassign) --</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">

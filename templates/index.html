@@ -147,8 +147,11 @@ async function loadAssignedBatteries() {
         );
         const batteryMap = new Map();
         matches.forEach(m => {
-            if (m.assigned_battery) {
-                const b = m.assigned_battery;
+            const assignedBatteries = (m.assigned_batteries && m.assigned_batteries.length)
+                ? m.assigned_batteries
+                : (m.assigned_battery ? [m.assigned_battery] : []);
+
+            assignedBatteries.forEach(b => {
                 const existing = batteryMap.get(b.id) || {
                     battery: b,
                     matches: [],
@@ -164,7 +167,7 @@ async function loadAssignedBatteries() {
                 }
                 existing.teamBadges.push(...trackedTeamBadgesForMatch(m, trackedTeamKeys));
                 batteryMap.set(b.id, existing);
-            }
+            });
         });
 
         if (batteryMap.size === 0) {

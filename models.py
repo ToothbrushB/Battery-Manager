@@ -611,6 +611,39 @@ class MatchDb(Base):
         }
 
 
+class MatchBatteryAssignmentDb(Base):
+    __tablename__ = "tba_match_battery_assignment"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    match_key: Mapped[str] = mapped_column(ForeignKey("tba_match.key"), nullable=False)
+    battery_id: Mapped[int] = mapped_column(ForeignKey("battery.id"), nullable=False)
+    sort_order: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[Optional[str]] = mapped_column(String(50))
+
+
+def ensure_tba_match_battery_assignment_table(engine):
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    if "tba_match_battery_assignment" in existing_tables:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS tba_match_battery_assignment (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    match_key TEXT NOT NULL,
+                    battery_id INTEGER NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT,
+                    FOREIGN KEY(match_key) REFERENCES tba_match(key),
+                    FOREIGN KEY(battery_id) REFERENCES battery(id)
+                )
+                """
+            )
+        )
+
+
 def ensure_battery_checkout_columns(engine):
     inspector = inspect(engine)
     existing_columns = {col["name"] for col in inspector.get_columns("battery")}

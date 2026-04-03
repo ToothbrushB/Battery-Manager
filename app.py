@@ -7,6 +7,7 @@ engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
 ensure_battery_history_columns(engine)
+ensure_tba_match_battery_assignment_table(engine)
 
 
 import json
@@ -377,10 +378,29 @@ def load_matches():
         if event_key and event_key != 'your-event-key-here':
             for m in db_session.query(MatchDb).filter_by(event_key=event_key).all():
                 d = m.to_dict()
-                if m.assigned_battery_id:
+                assignment_rows = (
+                    db_session.query(MatchBatteryAssignmentDb)
+                    .filter_by(match_key=m.key)
+                    .order_by(MatchBatteryAssignmentDb.sort_order.asc(), MatchBatteryAssignmentDb.id.asc())
+                    .all()
+                )
+                assigned_batteries = []
+                for assignment in assignment_rows:
+                    battery = db_session.get(BatteryDb, assignment.battery_id)
+                    if battery:
+                        assigned_batteries.append(
+                            {"id": battery.id, "name": battery.name, "asset_tag": battery.asset_tag}
+                        )
+
+                if not assigned_batteries and m.assigned_battery_id:
                     battery = db_session.get(BatteryDb, m.assigned_battery_id)
                     if battery:
-                        d['assigned_battery'] = {'id': battery.id, 'name': battery.name, 'asset_tag': battery.asset_tag}
+                        assigned_batteries.append(
+                            {"id": battery.id, "name": battery.name, "asset_tag": battery.asset_tag}
+                        )
+
+                d['assigned_batteries'] = assigned_batteries
+                d['assigned_battery'] = assigned_batteries[0] if assigned_batteries else None
                 matches.append(d)
         kv = db_session.get(KVStoreDb, 'last_tba_sync_at')
         last_synced_at = kv.value if kv else None
