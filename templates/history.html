@@ -20,6 +20,7 @@
             <tr>
                 <th scope="col" class="text-nowrap">Timestamp</th>
                 <th scope="col" class="text-nowrap">Battery</th>
+                <th scope="col" class="text-start text-nowrap">Assignment Activity</th>
                 <th scope="col" class="text-start">Notes</th>
                 {% for field in display_fields %}
                 <th scope="col" class="text-start text-nowrap">{{ field.name or field.db_column_name }}</th>
@@ -35,6 +36,7 @@
                         <div class="fw-semibold">{{ entry.battery_name or "Unnamed Battery" }}</div>
                         <div class="text-muted small">{{ entry.asset_tag or "No asset tag" }}</div>
                     </td>
+                    <td class="text-start">{{ entry.assignment_change or "" }}</td>
                     <td class="text-start">{{ entry.notes or "" }}</td>
                     {% for field in display_fields %}
                     {% set value = entry.custom_fields.get(field.db_column_name) %}
@@ -44,7 +46,7 @@
                 {% endfor %}
             {% else %}
                 <tr>
-                    <td colspan="{{ 3 + display_fields|length }}" class="text-center text-muted py-5">No history yet. Make some updates to see them appear here.</td>
+                    <td colspan="{{ 4 + display_fields|length }}" class="text-center text-muted py-5">No history yet. Make some updates to see them appear here.</td>
                 </tr>
             {% endif %}
         </tbody>

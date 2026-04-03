@@ -118,3 +118,43 @@
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="gridMoveModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Move Battery to Location</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-start">
+                <div id="gridMoveModalAlert" class="alert alert-info py-2 mb-3">
+                    Select a battery or scan a barcode to move it.
+                </div>
+
+                <input type="hidden" id="gridMoveTargetLocationId" value="">
+                <p class="mb-3">
+                    Target location:
+                    <span class="fw-semibold" id="gridMoveTargetLocationLabel">Loading...</span>
+                </p>
+
+                <div class="mb-3">
+                    <label for="gridMoveBatterySelect" class="form-label">Select Battery</label>
+                    <select id="gridMoveBatterySelect" class="form-select" aria-label="Select battery to move">
+                        <option value="">Loading batteries...</option>
+                    </select>
+                    <div class="form-text">Choosing a battery and moving it here will check it in if currently checked out.</div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                    <label for="gridMoveCameraSelect" class="form-label mb-0">Camera</label>
+                    <select id="gridMoveCameraSelect" class="form-select" aria-label="Select scanner camera" style="max-width: 320px;"></select>
+                </div>
+                <div id="gridMoveReader" style="width: 100%;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="gridMoveApplyButton">Move Selected Battery</button>
+            </div>
+        </div>
+    </div>
+</div>

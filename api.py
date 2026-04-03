@@ -1,10 +1,12 @@
 import os
+import re
 from flask import Blueprint, Response, jsonify, request
 import sqlalchemy
 from models import *
 from redis import Redis
 from rq import Queue, Repeat
 from rq import job
+
 import rq
 import sync
 import tba_sync
@@ -19,6 +21,7 @@ api = Blueprint("api", __name__, url_prefix="/api")
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
+ensure_battery_history_columns(engine)
 
 def ensure_periodic_job(job_id: str, func, interval_seconds: int):
     """Ensure a single periodic job exists for RQ worker --with-scheduler."""
@@ -122,15 +125,21 @@ def trigger_sync():
 @api.route("/qr_scan", methods=["POST"])
 def qr_scan():
     """Handle QR code scan"""
-    input = request.json.get("qr_data")
-    if "/hardware/" in input:  # this is a url in the form of /hardware/{id}
-        id = input.split("/hardware/")[1]
+    qr_data = str((request.json or {}).get("qr_data") or "").strip()
+    if not qr_data:
+        return jsonify({"message": "Invalid QR code data", "status": "error"}), 400
+
+    if "/hardware/" in qr_data:  # this is a url in the form of /hardware/{id}
+        match = re.search(r"/hardware/(\d+)", qr_data)
+        if not match:
+            return jsonify({"message": "Invalid hardware QR code data", "status": "error"}), 400
+        id = int(match.group(1))
         return get_battery_info(id)
-    elif "/location/" in input:  # this is a url in the form of /location/{id}
-        id = input.split("/location/")[1]
+    elif "/location/" in qr_data:  # this is a url in the form of /location/{id}
+        id = qr_data.split("/location/")[1]
         return jsonify({"message": "Location QR codes not yet supported", "status": "error"}), 400
-    elif input.regex_match("^[0-9]+$"):  # this is just an id
-        id = int(input)
+    elif re.fullmatch(r"\d+", qr_data):  # this is just an id
+        id = int(qr_data)
         return get_battery_info(id)
     else:
         return jsonify({"message": "Invalid QR code data", "status": "error"}), 400
@@ -267,8 +276,23 @@ def get_custom_fields():
 @api.route("/locations", methods=["GET"])
 def get_locations():
     """Retrieve all locations"""
+    only_allowed_param = (request.args.get("onlyAllowed") or "").strip().lower()
+    only_allowed = only_allowed_param in {"1", "true", "yes", "on"}
+
     with engine.connect() as connection:
         query = sqlalchemy.select(LocationDb)
+        if only_allowed:
+            allowed_parent_ids = (
+                sqlalchemy.select(LocationDb.id)
+                .where(LocationDb.allowed.is_(True))
+                .scalar_subquery()
+            )
+            query = query.where(
+                sqlalchemy.or_(
+                    LocationDb.allowed.is_(True),
+                    LocationDb.parent_id.in_(allowed_parent_ids),
+                )
+            )
         result = connection.execute(query).fetchall()
         locations = []
         for row in result:
@@ -350,6 +374,27 @@ def get_status():
 @api.route("/batteries", methods=["GET"])
 def get_batteries():
     """Retrieve batteries filtered by allowed statuses and locations."""
+    def parse_ts(value: str | None) -> float | None:
+        if not value:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def format_elapsed(seconds: float | None) -> str | None:
+        if seconds is None:
+            return None
+        total = max(0, int(seconds))
+        days, rem = divmod(total, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days > 0:
+            return f"{days}d {hours}h"
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+
     hidden_asset_ids = get_hidden_asset_ids()
     checkout_asset_names = {
         str(item.get("id")): item.get("name", "")
@@ -365,26 +410,67 @@ def get_batteries():
         }
         all_allowed_loc_ids = allowed_parent_ids | allowed_child_ids
 
+        all_batteries = db_session.query(BatteryDb).all()
+        visible_battery_ids = [b.id for b in all_batteries if b.id not in hidden_asset_ids]
+        history_entries_by_battery: dict[int, list[BatteryHistoryDb]] = {}
+        if visible_battery_ids:
+            history_entries = (
+                db_session.query(BatteryHistoryDb)
+                .filter(BatteryHistoryDb.battery_id.in_(visible_battery_ids))
+                .order_by(BatteryHistoryDb.battery_id.asc(), BatteryHistoryDb.recorded_at.desc())
+                .all()
+            )
+            for entry in history_entries:
+                history_entries_by_battery.setdefault(entry.battery_id, []).append(entry)
+
+        now_ts = datetime.now().timestamp()
+
         result = []
-        for b in db_session.query(BatteryDb).all():
+        for b in all_batteries:
             if b.id in hidden_asset_ids:
                 continue
             if not b.remote_data:
                 continue
             asset = msgspec.msgpack.decode(b.remote_data, type=Asset)
+            custom_field_values = {}
+            if asset.custom_fields:
+                for field_asset in asset.custom_fields.values():
+                    if field_asset and field_asset.field:
+                        custom_field_values[field_asset.field] = field_asset.value
             status_id = asset.status_label.id if asset.status_label else None
             location_id = asset.location.id if asset.location else None
-            status_ok = not allowed_status_ids or status_id in allowed_status_ids
-            location_ok = not all_allowed_loc_ids or location_id in all_allowed_loc_ids
+            status_ok = not allowed_status_ids or status_id in allowed_status_ids or status_id is None
+            location_ok = not all_allowed_loc_ids or location_id in all_allowed_loc_ids or location_id is None
             if status_ok and location_ok:
+                location_elapsed_seconds = None
+                location_elapsed_display = None
+                current_location_name = asset.location.name if asset.location else None
+                if current_location_name:
+                    location_history_entries = history_entries_by_battery.get(b.id, [])
+                    location_start_ts = None
+                    for entry in location_history_entries:
+                        if (entry.location_name or "") == current_location_name:
+                            ts = parse_ts(entry.recorded_at)
+                            if ts is not None:
+                                location_start_ts = ts
+                        elif location_start_ts is not None:
+                            break
+                    if location_start_ts is not None:
+                        location_elapsed_seconds = max(0.0, now_ts - location_start_ts)
+                        location_elapsed_display = format_elapsed(location_elapsed_seconds)
+
                 result.append({
                     'id': b.id,
                     'name': b.name,
                     'asset_tag': b.asset_tag,
                     'status': asset.status_label.name if asset.status_label else None,
                     'location': asset.location.name if asset.location else None,
+                    'location_id': location_id,
+                    'location_elapsed_seconds': location_elapsed_seconds,
+                    'location_elapsed_display': location_elapsed_display,
                     'checked_out_to_asset_id': b.checked_out_to_asset_id,
                     'checked_out_to_asset_name': checkout_asset_names.get(str(b.checked_out_to_asset_id), None) if b.checked_out_to_asset_id else None,
+                    'custom_field_values': custom_field_values,
                 })
         return jsonify(result)
 

@@ -11,6 +11,7 @@ import msgspec
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
+ensure_battery_history_columns(engine)
 
 CHECKIN_PENDING_MARKER = "__checkin__"
 

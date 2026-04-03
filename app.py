@@ -1,10 +1,12 @@
 import os
+import subprocess
 from datetime import datetime
 import sqlalchemy
 from models import *
 engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 Base.metadata.create_all(engine)
 ensure_battery_checkout_columns(engine)
+ensure_battery_history_columns(engine)
 
 
 import json
@@ -66,6 +68,26 @@ config = json.load(open("config.json"))
 load_settings_from_config()
 
 
+def get_git_describe() -> str:
+    """Return repository version string similar to `git describe --dirty`."""
+    try:
+        output = subprocess.check_output(
+            ["git", "describe", "--dirty"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        value = (output or "").strip()
+        return value or "unknown"
+    except Exception:
+        return "unknown"
+
+
+@app.context_processor
+def inject_build_info():
+    return {"git_describe": get_git_describe()}
+
+
 @app.after_request
 def after_request(response):
     """Ensure responses aren't cached"""
@@ -78,12 +100,102 @@ def after_request(response):
 @app.route("/")
 def index():
     hidden_ids = get_hidden_asset_ids()
+    tracked_team_keys = get_preference("tba-team-key") or ""
+
+    def format_elapsed(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        days, rem = divmod(seconds, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days > 0:
+            return f"{days}d {hours}h"
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+
     with sqlalchemy.orm.Session(engine) as db_session:
         query = db_session.query(BatteryDb)
         if hidden_ids:
             query = query.filter(BatteryDb.id.notin_(hidden_ids))
-        recommended_batteries = query.limit(5).all()
-        return render_template("index.html", recommended_batteries=[])
+        batteries = query.all()
+
+        battery_views: list[BatteryView] = [BatteryView.from_battery_db(b) for b in batteries]
+        current_status_by_battery: dict[int, str] = {}
+        for battery in battery_views:
+            status_name = (
+                battery.status_label.name
+                if battery.status_label and battery.status_label.name
+                else "Unknown"
+            )
+            current_status_by_battery[battery.id] = status_name
+
+        status_start_ts: dict[int, float] = {}
+        histories = (
+            db_session.query(BatteryHistoryDb)
+            .filter(BatteryHistoryDb.battery_id.in_([b.id for b in battery_views]))
+            .order_by(BatteryHistoryDb.battery_id.asc(), BatteryHistoryDb.recorded_at.desc())
+            .all()
+        ) if battery_views else []
+
+        done_batteries: set[int] = set()
+        for entry in histories:
+            battery_id = entry.battery_id
+            if battery_id in done_batteries:
+                continue
+            current_status = current_status_by_battery.get(battery_id, "Unknown")
+            entry_status = entry.status_name or "Unknown"
+            try:
+                entry_ts = float(entry.recorded_at) if entry.recorded_at else datetime.now().timestamp()
+            except (TypeError, ValueError):
+                entry_ts = datetime.now().timestamp()
+
+            if battery_id not in status_start_ts and entry_status == current_status:
+                status_start_ts[battery_id] = entry_ts
+            elif battery_id in status_start_ts and entry_status != current_status:
+                done_batteries.add(battery_id)
+
+        now_ts = datetime.now().timestamp()
+        status_columns_map: dict[str, list[dict]] = {}
+        for battery in battery_views:
+            status_name = current_status_by_battery.get(battery.id, "Unknown")
+            start_ts = status_start_ts.get(battery.id)
+            if start_ts is None:
+                try:
+                    start_ts = float(battery.local_modified_at) if battery.local_modified_at else now_ts
+                except (TypeError, ValueError):
+                    start_ts = now_ts
+            elapsed = max(0.0, now_ts - start_ts)
+            status_columns_map.setdefault(status_name, []).append(
+                {
+                    "id": battery.id,
+                    "name": battery.name or "Unnamed Battery",
+                    "asset_tag": battery.asset_tag or "",
+                    "location": battery.location.name if battery.location else "Unassigned",
+                    "elapsed_seconds": elapsed,
+                    "elapsed_display": format_elapsed(elapsed),
+                }
+            )
+
+        status_columns = []
+        for status_name in sorted(status_columns_map.keys()):
+            cards = sorted(
+                status_columns_map[status_name],
+                key=lambda c: c["elapsed_seconds"],
+                reverse=True,
+            )
+            status_columns.append(
+                {
+                    "status": status_name,
+                    "count": len(cards),
+                    "cards": cards,
+                }
+            )
+
+        return render_template(
+            "index.html",
+            status_columns=status_columns,
+            tracked_team_keys=tracked_team_keys,
+        )
 
 
 @app.route("/list_view", methods=["GET"])
@@ -123,7 +235,10 @@ def history():
             .all()
         )
 
+        entries = list(reversed(entries))
+
         history_rows = []
+        previous_by_battery: dict[int, BatteryHistoryDb] = {}
         for entry in entries:
             timestamp = None
             if entry.recorded_at:
@@ -133,6 +248,24 @@ def history():
                     )
                 except (ValueError, TypeError):
                     timestamp = entry.recorded_at
+
+            assignment_change = ""
+            previous = previous_by_battery.get(entry.battery_id)
+            if previous is not None:
+                prev_checkout = previous.checkout_asset_id or ""
+                curr_checkout = entry.checkout_asset_id or ""
+                prev_location = previous.location_name or ""
+                curr_location = entry.location_name or ""
+
+                if prev_checkout != curr_checkout:
+                    if curr_checkout:
+                        assignment_change = f"Checked out to asset {curr_checkout}"
+                    else:
+                        location_suffix = f" at {curr_location}" if curr_location else ""
+                        assignment_change = f"Checked in{location_suffix}"
+                elif prev_location != curr_location and curr_location:
+                    assignment_change = f"Moved to location {curr_location}"
+
             history_rows.append(
                 {
                     "id": entry.id,
@@ -141,9 +274,16 @@ def history():
                     "asset_tag": entry.asset_tag,
                     "notes": entry.notes,
                     "timestamp": timestamp,
+                    "status_name": entry.status_name,
+                    "location_name": entry.location_name,
+                    "checkout_asset_id": entry.checkout_asset_id,
+                    "assignment_change": assignment_change,
                     "custom_fields": entry.custom_field_values(),
                 }
             )
+            previous_by_battery[entry.battery_id] = entry
+
+    history_rows.reverse()
 
     return render_template(
         "history.html",

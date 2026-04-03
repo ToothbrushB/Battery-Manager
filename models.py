@@ -466,6 +466,9 @@ class BatteryHistoryDb(Base):
     asset_tag: Mapped[Optional[str]] = mapped_column(String(100))
     name: Mapped[Optional[str]] = mapped_column(String(255))
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    status_name: Mapped[Optional[str]] = mapped_column(String(255))
+    location_name: Mapped[Optional[str]] = mapped_column(String(255))
+    checkout_asset_id: Mapped[Optional[str]] = mapped_column(String(100))
     recorded_at: Mapped[Optional[str]] = mapped_column(String(50))
     custom_fields_blob: Mapped[Optional[bytes]]
 
@@ -490,6 +493,13 @@ class BatteryHistoryDb(Base):
             asset_tag=asset.asset_tag,
             name=asset.name,
             notes=asset.notes,
+            status_name=asset.status_label.name if asset.status_label else None,
+            location_name=asset.location.name if asset.location else None,
+            checkout_asset_id=(
+                str(asset.assigned_to.id)
+                if asset.assigned_to and getattr(asset.assigned_to, "type", None) == "asset"
+                else None
+            ),
             recorded_at=str(recorded_at or datetime.now().timestamp()),
             custom_fields_blob=msgspec.msgpack.encode(custom_values),
         )
@@ -619,6 +629,22 @@ def ensure_battery_checkout_columns(engine):
                 connection.execute(statement)
 
 
+def ensure_battery_history_columns(engine):
+    inspector = inspect(engine)
+    existing_columns = {col["name"] for col in inspector.get_columns("battery_history")}
+    statements = []
+    if "status_name" not in existing_columns:
+        statements.append(text("ALTER TABLE battery_history ADD COLUMN status_name TEXT"))
+    if "location_name" not in existing_columns:
+        statements.append(text("ALTER TABLE battery_history ADD COLUMN location_name TEXT"))
+    if "checkout_asset_id" not in existing_columns:
+        statements.append(text("ALTER TABLE battery_history ADD COLUMN checkout_asset_id TEXT"))
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(statement)
+
+
 def record_battery_history(
     session, battery: BatteryDb, recorded_at: Optional[float] = None
 ):
@@ -642,6 +668,9 @@ def record_battery_history(
         and last_entry.asset_tag == entry.asset_tag
         and (last_entry.name or "") == (entry.name or "")
         and (last_entry.notes or "") == (entry.notes or "")
+        and (last_entry.status_name or "") == (entry.status_name or "")
+        and (last_entry.location_name or "") == (entry.location_name or "")
+        and (last_entry.checkout_asset_id or "") == (entry.checkout_asset_id or "")
         and (last_entry.custom_fields_blob or b"")
         == (entry.custom_fields_blob or b"")
     ):

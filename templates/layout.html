@@ -95,7 +95,11 @@
     <main class="container py-5 text-center">
         {% block main %}{% endblock %}
     </main>
-    <footer class="d-flex justify-content-center">© 2026 Breck Robotics. No Rights Reserved.</footer>
+    <footer class="d-flex justify-content-center gap-2">
+        <span>© 2026 Breck Robotics. No Rights Reserved.</span>
+        <span class="text-muted">|</span>
+        <span class="text-muted">{{ git_describe }}</span>
+    </footer>
     <script nonce="{{ csp_nonce() }}">
         feather.replace();
     </script>

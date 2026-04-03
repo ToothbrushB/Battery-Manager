@@ -5,74 +5,519 @@ Grid View
 {% endblock %}
 
 {% block main %}
-<div>
-    <h1>Ho Ho Ho! Look at This Grid</h1>
-    <p>❄️🎅🎄🦌☃️❄️</p>
-    <h2>ABC</h2>
-    <table class="table">
-        <thead>
-            <th scope="col">A</th>
-            <th scope="col">B</th>
-            <th scope="col">C</th>
-        </thead>
-        <tr>
-            <td>1</td>
-            <td>2</td>
-            <td>3</td>
-        </tr>
-        <tr>
-            <td>4</td>
-            <td>5</td>
-            <td>6</td>
-        </tr>
-        <tr>
-            <td>7</td>
-            <td>8</td>
-            <td>9</td>
-        </tr>
-        <tr>
-            <td>10</td>
-            <td>11</td>
-            <td>12</td>
-        </tr>
-        <tr>
-            <td>13</td>
-            <td>14</td>
-            <td>15</td>
-        </tr>
-    </table>
-    <h2>DEF</h2>
-    <table class="table">
-        <thead>
-            <th scope="col">D</th>
-            <th scope="col">E</th>
-            <th scope="col">F</th>
-        </thead>
-        <tr>
-            <td>1</td>
-            <td>2</td>
-            <td>3</td>
-        </tr>
-        <tr>
-            <td>4</td>
-            <td>5</td>
-            <td>6</td>
-        </tr>
-        <tr>
-            <td>7</td>
-            <td>8</td>
-            <td>9</td>
-        </tr>
-        <tr>
-            <td>10</td>
-            <td>11</td>
-            <td>12</td>
-        </tr>
-        <tr>
-            <td>13</td>
-            <td>14</td>
-            <td>15</td>
-        </tr>
-    </table>
+<div class="text-start">
+    <h1 class="mb-1">Grid View</h1>
+    <p class="text-muted mb-4" id="gridRefreshStatus">Live updates every 5s.</p>
+    <div id="locationGridContainer" class="d-grid gap-4"></div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce() }}">
+const slotSuffixRegex = /([A-Za-z]+)(\d+)$/;
+let latestGridBatteries = [];
+let gridMoveQrCode = null;
+let gridMoveScannerActive = false;
+let gridMoveModalInstance = null;
+
+function escapeHtml(value) {
+    return (value ?? '')
+        .toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function parseLocationSlot(locationName) {
+    const trimmed = (locationName || '').trim();
+    const match = trimmed.match(slotSuffixRegex);
+    if (!match) return null;
+    return {
+        column: match[1].toUpperCase(),
+        row: Number.parseInt(match[2], 10),
+    };
+}
+
+function getBatteryCardHtml(battery) {
+    if (!battery) {
+        return '<button type="button" class="btn w-100 text-start grid-cell-empty grid-empty-trigger">Empty</button>';
+    }
+    return `
+        <button type="button" class="btn btn-hover-border w-100 text-start grid-battery-card" draggable="true" data-battery-id="${battery.id}" data-bs-toggle="modal" data-bs-target="#batteryModal">
+            <div class="fw-semibold text-truncate">${escapeHtml(battery.name || 'Unnamed Battery')}</div>
+            <div class="small text-body-secondary text-truncate">Tag: ${escapeHtml(battery.asset_tag || 'N/A')}</div>
+            <div class="small text-truncate">${escapeHtml(battery.location || 'Unassigned')}</div>
+            <div class="small">Status: ${escapeHtml(battery.status || 'Unknown')}</div>
+            <div class="small text-body-secondary">In location: ${escapeHtml(battery.location_elapsed_display || 'Unknown')}</div>
+        </button>
+    `;
+}
+
+function buildGridModel(locations, batteries) {
+    const batteryByLocationId = new Map();
+    (batteries || []).forEach(battery => {
+        if (battery.location_id) {
+            batteryByLocationId.set(battery.location_id, battery);
+        }
+    });
+
+    const grouped = new Map();
+    (locations || []).forEach(location => {
+        const slot = parseLocationSlot(location.name);
+        if (!slot) return;
+
+        const parentName = location.parent?.name || 'Unparented';
+        if (!grouped.has(parentName)) {
+            grouped.set(parentName, {
+                parentName,
+                columns: new Set(),
+                rows: new Set(),
+                cells: new Map(),
+            });
+        }
+
+        const group = grouped.get(parentName);
+        const battery = batteryByLocationId.get(location.id) || null;
+        group.columns.add(slot.column);
+        group.rows.add(slot.row);
+        group.cells.set(`${slot.column}:${slot.row}`, {
+            location,
+            battery,
+        });
+    });
+
+    return Array.from(grouped.values())
+        .map(group => ({
+            ...group,
+            columns: Array.from(group.columns).sort((a, b) => a.localeCompare(b)),
+            rows: Array.from(group.rows).sort((a, b) => a - b),
+        }))
+        .sort((a, b) => a.parentName.localeCompare(b.parentName));
+}
+
+function renderGrid(groupedTables) {
+    const container = document.getElementById('locationGridContainer');
+    if (!container) return;
+
+    if (!groupedTables.length) {
+        container.innerHTML = '<div class="alert alert-info mb-0">No grid locations found. Expected location names ending with values like A1, B10, C3.</div>';
+        return;
+    }
+
+    container.innerHTML = groupedTables.map(group => {
+        const headerCells = group.columns.map(col => `<th scope="col" class="text-center">${escapeHtml(col)}</th>`).join('');
+        const rows = group.rows.map(rowNum => {
+            const cells = group.columns.map(col => {
+                const cell = group.cells.get(`${col}:${rowNum}`);
+                const battery = cell ? cell.battery : null;
+                const locationLabel = cell?.location?.name || `${col}${rowNum}`;
+                return `
+                    <td class="grid-cell ${battery ? 'grid-cell-filled' : 'grid-cell-empty-drop'}" data-location-id="${cell?.location?.id ?? ''}" data-location-label="${escapeHtml(locationLabel)}" data-has-battery="${battery ? 'true' : 'false'}" title="${escapeHtml(locationLabel)}">
+                        ${getBatteryCardHtml(battery)}
+                    </td>
+                `;
+            }).join('');
+            return `
+                <tr>
+                    <th scope="row" class="align-middle text-center">${rowNum}</th>
+                    ${cells}
+                </tr>
+            `;
+        }).join('');
+
+        return `
+            <section class="card shadow-sm border-0">
+                <div class="card-body">
+                    <h2 class="h5 mb-3">${escapeHtml(group.parentName)}</h2>
+                    <div class="table-responsive">
+                        <table class="table table-bordered align-middle location-grid-table mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th scope="col" class="text-center">#</th>
+                                    ${headerCells}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rows}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        `;
+    }).join('');
+
+    container.querySelectorAll('.grid-battery-card').forEach(button => {
+        button.addEventListener('dragstart', (event) => {
+            const batteryId = button.getAttribute('data-battery-id');
+            if (!batteryId || !event.dataTransfer) return;
+            event.dataTransfer.setData('text/plain', batteryId);
+            event.dataTransfer.effectAllowed = 'move';
+            button.classList.add('dragging');
+        });
+
+        button.addEventListener('dragend', () => {
+            button.classList.remove('dragging');
+            container.querySelectorAll('.grid-cell-dragover').forEach(cell => cell.classList.remove('grid-cell-dragover'));
+        });
+
+        button.addEventListener('click', () => {
+            const batteryId = button.getAttribute('data-battery-id');
+            if (!batteryId || typeof showBatteryInfoModal !== 'function') return;
+            showBatteryInfoModal(batteryId);
+        });
+    });
+
+    container.querySelectorAll('.grid-cell-empty-drop').forEach(cell => {
+        cell.addEventListener('dragover', (event) => {
+            const hasBattery = cell.getAttribute('data-has-battery') === 'true';
+            if (hasBattery) return;
+            event.preventDefault();
+            cell.classList.add('grid-cell-dragover');
+        });
+
+        cell.addEventListener('dragleave', () => {
+            cell.classList.remove('grid-cell-dragover');
+        });
+
+        cell.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            cell.classList.remove('grid-cell-dragover');
+            const hasBattery = cell.getAttribute('data-has-battery') === 'true';
+            if (hasBattery) return;
+            const batteryId = event.dataTransfer?.getData('text/plain');
+            const locationId = cell.getAttribute('data-location-id');
+            const locationLabel = cell.getAttribute('data-location-label') || 'selected location';
+            if (!batteryId || !locationId) return;
+            await moveBatteryToLocation(batteryId, locationId, `Moved by drag-and-drop to ${locationLabel}.`);
+        });
+
+        const emptyTrigger = cell.querySelector('.grid-empty-trigger');
+        if (emptyTrigger) {
+            emptyTrigger.addEventListener('click', () => {
+                const hasBattery = cell.getAttribute('data-has-battery') === 'true';
+                if (hasBattery) return;
+                const locationId = cell.getAttribute('data-location-id');
+                const locationLabel = cell.getAttribute('data-location-label') || 'selected location';
+                if (!locationId) return;
+                openGridMoveModal(locationId, locationLabel);
+            });
+        }
+    });
+}
+
+function setGridMoveAlert(message, kind = 'info') {
+    const el = document.getElementById('gridMoveModalAlert');
+    if (!el) return;
+    el.className = `alert alert-${kind} py-2 mb-3`;
+    el.innerText = message;
+}
+
+function populateGridMoveBatterySelect() {
+    const select = document.getElementById('gridMoveBatterySelect');
+    if (!select) return;
+
+    const sorted = (latestGridBatteries || [])
+        .slice()
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    if (!sorted.length) {
+        select.innerHTML = '<option value="">No batteries available</option>';
+        return;
+    }
+
+    select.innerHTML = '<option value="">Select a battery</option>';
+    sorted.forEach(battery => {
+        const option = document.createElement('option');
+        option.value = String(battery.id);
+        const locationText = battery.location ? ` @ ${battery.location}` : '';
+        option.text = `${battery.asset_tag || battery.id} – ${battery.name || 'Unnamed'}${locationText}`;
+        select.appendChild(option);
+    });
+}
+
+async function moveBatteryToLocation(batteryId, locationId, successMessage) {
+    try {
+        const response = await fetch(`/api/battery/${batteryId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                batteryLocation: String(locationId),
+                batteryCheckoutTarget: '',
+                batteryStatusSelect: '',
+                batteryNotes: null,
+            }),
+        });
+
+        const data = await response.json();
+        if (!response.ok || data.status === 'error') {
+            const message = data.message || `Move failed (HTTP ${response.status})`;
+            if (typeof showToast === 'function') showToast(message, 'Move Failed', 'error');
+            setGridMoveAlert(message, 'danger');
+            return false;
+        }
+
+        if (typeof showToast === 'function') showToast(successMessage || 'Battery moved successfully.', 'Battery Moved', 'success');
+        await refreshGridView();
+        return true;
+    } catch (error) {
+        const message = `Move failed: ${error.message}`;
+        if (typeof showToast === 'function') showToast(message, 'Move Failed', 'error');
+        setGridMoveAlert(message, 'danger');
+        return false;
+    }
+}
+
+function buildGridScanner(cameraId) {
+    if (!gridMoveQrCode) {
+        gridMoveQrCode = new Html5Qrcode('gridMoveReader');
+    }
+
+    const scannerOptions = { fps: 10 };
+    return gridMoveQrCode.start(
+        cameraId,
+        scannerOptions,
+        async (decodedText) => {
+            try {
+                const resp = await fetch('/api/qr_scan', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ qr_data: decodedText }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || data.status === 'error' || !data.id) {
+                    throw new Error(data.message || 'Unable to resolve battery from QR code.');
+                }
+                const locationId = document.getElementById('gridMoveTargetLocationId')?.value;
+                const locationLabel = document.getElementById('gridMoveTargetLocationLabel')?.innerText || 'selected location';
+                if (!locationId) {
+                    throw new Error('No target location selected.');
+                }
+
+                setGridMoveAlert(`Scanned battery ${data.asset_tag || data.id}. Moving to ${locationLabel}...`, 'info');
+                const moved = await moveBatteryToLocation(data.id, locationId, `Moved battery to ${locationLabel} from scan.`);
+                if (moved && gridMoveModalInstance) {
+                    gridMoveModalInstance.hide();
+                }
+            } catch (error) {
+                setGridMoveAlert(error.message, 'danger');
+            }
+        },
+        () => {
+            // ignore decode errors
+        }
+    );
+}
+
+async function startGridMoveScanner() {
+    const cameraSelect = document.getElementById('gridMoveCameraSelect');
+    if (!cameraSelect) return;
+
+    try {
+        const cameras = await Html5Qrcode.getCameras();
+        cameraSelect.innerHTML = '';
+        if (!cameras || !cameras.length) {
+            setGridMoveAlert('No cameras found for QR scanning.', 'warning');
+            return;
+        }
+
+        cameras.forEach((camera, index) => {
+            const option = document.createElement('option');
+            option.value = camera.id;
+            option.text = camera.label || `Camera ${index + 1}`;
+            cameraSelect.appendChild(option);
+        });
+
+        await buildGridScanner(cameraSelect.value);
+        gridMoveScannerActive = true;
+
+        cameraSelect.onchange = async () => {
+            if (!gridMoveQrCode) return;
+            try {
+                if (gridMoveScannerActive) {
+                    await gridMoveQrCode.stop();
+                    gridMoveScannerActive = false;
+                }
+                await buildGridScanner(cameraSelect.value);
+                gridMoveScannerActive = true;
+            } catch (error) {
+                setGridMoveAlert(`Failed to switch camera: ${error.message}`, 'danger');
+            }
+        };
+    } catch (error) {
+        setGridMoveAlert(`Unable to access camera: ${error.message}`, 'danger');
+    }
+}
+
+async function stopGridMoveScanner() {
+    if (!gridMoveQrCode || !gridMoveScannerActive) return;
+    try {
+        await gridMoveQrCode.stop();
+    } catch (error) {
+        // ignore scanner stop failures
+    } finally {
+        gridMoveScannerActive = false;
+    }
+}
+
+function openGridMoveModal(locationId, locationLabel) {
+    const locationIdEl = document.getElementById('gridMoveTargetLocationId');
+    const locationLabelEl = document.getElementById('gridMoveTargetLocationLabel');
+    const batterySelect = document.getElementById('gridMoveBatterySelect');
+
+    if (!locationIdEl || !locationLabelEl || !batterySelect) return;
+    locationIdEl.value = String(locationId);
+    locationLabelEl.innerText = locationLabel;
+    populateGridMoveBatterySelect();
+    batterySelect.value = '';
+    setGridMoveAlert(`Move a battery into ${locationLabel}.`, 'info');
+
+    if (!gridMoveModalInstance) {
+        const modalEl = document.getElementById('gridMoveModal');
+        if (modalEl) {
+            gridMoveModalInstance = bootstrap.Modal.getOrCreateInstance(modalEl);
+        }
+    }
+    if (gridMoveModalInstance) {
+        gridMoveModalInstance.show();
+    }
+}
+
+function setupGridMoveModalHandlers() {
+    const modalEl = document.getElementById('gridMoveModal');
+    const applyButton = document.getElementById('gridMoveApplyButton');
+    const batterySelect = document.getElementById('gridMoveBatterySelect');
+    const locationInput = document.getElementById('gridMoveTargetLocationId');
+    const locationLabel = document.getElementById('gridMoveTargetLocationLabel');
+
+    if (!modalEl || !applyButton || !batterySelect || !locationInput) return;
+
+    modalEl.addEventListener('shown.bs.modal', () => {
+        startGridMoveScanner();
+    });
+
+    modalEl.addEventListener('hidden.bs.modal', () => {
+        stopGridMoveScanner();
+        const reader = document.getElementById('gridMoveReader');
+        if (reader) reader.innerHTML = '';
+    });
+
+    applyButton.addEventListener('click', async () => {
+        const batteryId = batterySelect.value;
+        const targetLocationId = locationInput.value;
+        const targetLabel = locationLabel?.innerText || 'selected location';
+
+        if (!batteryId) {
+            setGridMoveAlert('Please choose a battery to move.', 'warning');
+            return;
+        }
+        if (!targetLocationId) {
+            setGridMoveAlert('Target location is missing.', 'danger');
+            return;
+        }
+
+        const moved = await moveBatteryToLocation(batteryId, targetLocationId, `Moved battery to ${targetLabel}.`);
+        if (moved && gridMoveModalInstance) {
+            gridMoveModalInstance.hide();
+        }
+    });
+}
+
+async function refreshGridView() {
+    const statusEl = document.getElementById('gridRefreshStatus');
+    try {
+        const [locationsResp, batteriesResp] = await Promise.all([
+            fetch('/api/locations?onlyAllowed=true'),
+            fetch('/api/batteries'),
+        ]);
+        if (!locationsResp.ok) {
+            throw new Error(`Locations HTTP ${locationsResp.status}`);
+        }
+        if (!batteriesResp.ok) {
+            throw new Error(`Batteries HTTP ${batteriesResp.status}`);
+        }
+        const locations = await locationsResp.json();
+        const batteries = await batteriesResp.json();
+    latestGridBatteries = batteries || [];
+        const grouped = buildGridModel(locations, batteries);
+        renderGrid(grouped);
+        if (statusEl) statusEl.innerText = `Live updates every 5s. Last updated ${new Date().toLocaleTimeString()}.`;
+    } catch (error) {
+        if (statusEl) statusEl.innerText = `Live updates every 5s. Last refresh failed: ${error.message}`;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    setupGridMoveModalHandlers();
+    refreshGridView();
+    setInterval(refreshGridView, 5000);
+});
+</script>
+
+<style nonce="{{ csp_nonce() }}">
+.location-grid-table th,
+.location-grid-table td {
+    min-width: 220px;
+}
+
+.location-grid-table thead th {
+    white-space: nowrap;
+}
+
+.grid-cell {
+    padding: 0.4rem;
+    background: #f8f9fa;
+}
+
+.grid-cell-empty {
+    border: 1px dashed #ced4da;
+    border-radius: 0.5rem;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6c757d;
+    font-size: 0.9rem;
+    background: #fff;
+}
+
+.grid-cell-empty:hover,
+.grid-cell-empty:focus-visible {
+    border-color: #0d6efd;
+    color: #0d6efd;
+    background: #f0f6ff;
+}
+
+.grid-cell-dragover {
+    outline: 2px dashed #0d6efd;
+    outline-offset: -4px;
+    background: #eaf3ff;
+}
+
+.grid-battery-card {
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    min-height: 120px;
+    padding: 0.6rem 0.7rem;
+    background: #fff;
+    transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+
+.grid-battery-card:hover,
+.grid-battery-card:focus-visible {
+    transform: translateY(-2px);
+    box-shadow: 0 0.45rem 0.9rem rgba(0, 0, 0, 0.12);
+    border-color: #0d6efd;
+}
+
+.grid-battery-card.dragging {
+    opacity: 0.55;
+}
+</style>
 {% endblock %}

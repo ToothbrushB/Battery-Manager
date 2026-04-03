@@ -6,10 +6,10 @@ List View
 
 {% block main %}
 <div>
-    <h1>Ho Ho Ho! Look at This List</h1>
+    <h1>List View</h1>
     <p class="text-muted" id="listRefreshStatus">Live updates every 5s.</p>
     <table class="table">
-        <thead>
+        <thead id="batteryListHead">
             <tr>
                 <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="asset_tag">Tag</button></th>
                 <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="name">Name</button></th>
@@ -39,6 +39,7 @@ List View
 {% block scripts %}
 <script nonce="{{ csp_nonce() }}">
 let batteryListData = [];
+let displayCustomFields = [];
 let currentSort = { key: 'asset_tag', direction: 'asc' };
 
 function checkedOutDisplayValue(battery) {
@@ -47,16 +48,53 @@ function checkedOutDisplayValue(battery) {
     return name ? `${battery.checked_out_to_asset_id} – ${name}` : `${battery.checked_out_to_asset_id}`;
 }
 
+function escapeHtml(value) {
+    return (value ?? '')
+        .toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getSortValue(item, key) {
+    if (key.startsWith('cf:')) {
+        const fieldKey = key.slice(3);
+        return item.custom_field_values?.[fieldKey] ?? '';
+    }
+    return item[key] ?? '';
+}
+
 function sortBatteryData(data) {
     const { key, direction } = currentSort;
     const multiplier = direction === 'asc' ? 1 : -1;
     data.sort((a, b) => {
-        const av = (a[key] ?? '').toString().toLowerCase();
-        const bv = (b[key] ?? '').toString().toLowerCase();
+        const av = getSortValue(a, key).toString().toLowerCase();
+        const bv = getSortValue(b, key).toString().toLowerCase();
         if (av < bv) return -1 * multiplier;
         if (av > bv) return 1 * multiplier;
         return 0;
     });
+}
+
+function renderHeaders() {
+    const thead = document.getElementById('batteryListHead');
+    if (!thead) return;
+    const dynamicHeaders = displayCustomFields
+        .map(field => `<th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="cf:${field.db_column_name}">${escapeHtml(field.name || field.db_column_name)}</button></th>`)
+        .join('');
+    thead.innerHTML = `
+        <tr>
+            <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="asset_tag">Tag</button></th>
+            <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="name">Name</button></th>
+            <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="status">Status</button></th>
+            <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="location">Location</button></th>
+            <th scope="col"><button type="button" class="btn btn-link p-0 text-decoration-none sort-header" data-sort-key="checked_out_to_asset_display">Checked Out To</button></th>
+            ${dynamicHeaders}
+            <th scope="col">Actions</th>
+        </tr>
+    `;
 }
 
 function renderBatteryRows() {
@@ -66,13 +104,18 @@ function renderBatteryRows() {
         const status = battery.status || '';
         const location = battery.location || '';
         const checkedOut = checkedOutDisplayValue(battery);
+        const customCols = displayCustomFields.map(field => {
+            const val = battery.custom_field_values?.[field.db_column_name] ?? '';
+            return `<td>${escapeHtml(val)}</td>`;
+        }).join('');
         return `
             <tr>
-                <td>${battery.asset_tag || ''}</td>
-                <td>${battery.name || ''}</td>
-                <td>${status}</td>
-                <td>${location}</td>
-                <td>${checkedOut}</td>
+                <td>${escapeHtml(battery.asset_tag || '')}</td>
+                <td>${escapeHtml(battery.name || '')}</td>
+                <td>${escapeHtml(status)}</td>
+                <td>${escapeHtml(location)}</td>
+                <td>${escapeHtml(checkedOut)}</td>
+                ${customCols}
                 <td><button class="btn btn-primary batteryModalButton" data-bs-toggle="modal" data-bs-target="#batteryModal" data-battery-id="${battery.id}">View</button></td>
             </tr>
         `;
@@ -91,11 +134,23 @@ function renderBatteryRows() {
 async function refreshBatteryList() {
     const statusEl = document.getElementById('listRefreshStatus');
     try {
-        const response = await fetch('/api/batteries');
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+        const [batteryResp, fieldResp] = await Promise.all([
+            fetch('/api/batteries'),
+            fetch('/api/custom_fields')
+        ]);
+        if (!batteryResp.ok) {
+            throw new Error(`Batteries HTTP ${batteryResp.status}`);
         }
-        const data = await response.json();
+        if (!fieldResp.ok) {
+            throw new Error(`Fields HTTP ${fieldResp.status}`);
+        }
+        const data = await batteryResp.json();
+        const fields = await fieldResp.json();
+        displayCustomFields = (fields || []).filter(field => {
+            const cfg = (field.config || '').toString().toLowerCase();
+            return cfg === 'display' || cfg === 'edit';
+        });
+        renderHeaders();
         batteryListData = (data || []).map(item => ({
             ...item,
             checked_out_to_asset_display: checkedOutDisplayValue(item),
@@ -113,19 +168,21 @@ async function refreshBatteryList() {
 }
 
 function setupSorting() {
-    document.querySelectorAll('.sort-header').forEach(button => {
-        button.addEventListener('click', () => {
-            const key = button.getAttribute('data-sort-key');
-            if (!key) return;
-            if (currentSort.key === key) {
-                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
-            } else {
-                currentSort.key = key;
-                currentSort.direction = 'asc';
-            }
-            sortBatteryData(batteryListData);
-            renderBatteryRows();
-        });
+    const thead = document.getElementById('batteryListHead');
+    if (!thead) return;
+    thead.addEventListener('click', (event) => {
+        const button = event.target.closest('.sort-header');
+        if (!button) return;
+        const key = button.getAttribute('data-sort-key');
+        if (!key) return;
+        if (currentSort.key === key) {
+            currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSort.key = key;
+            currentSort.direction = 'asc';
+        }
+        sortBatteryData(batteryListData);
+        renderBatteryRows();
     });
 }
 

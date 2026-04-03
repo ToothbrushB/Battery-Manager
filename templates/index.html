@@ -17,17 +17,33 @@ Home
         </div>
     </div>
 
-    <div class="container">
-        <h2 class="me-3">Recommended Batteries</h2>
-        <div class="row">
-            {% for battery in recommended_batteries %}
-            <div class="col-sm-6 mb-3">
-                <div class="card">
-                    <div class="card-body">
-                        <h5 class="card-title">{{ battery.name }}</h5>
-                        <p class="card-text">Recommendation {{ loop.index }}</p>
-                        <button class="btn btn-primary batteryModalButton" data-bs-toggle="modal"
-                            data-bs-target="#batteryModal" data-battery-id="{{ battery.id }}">Info</button>
+    <div class="container mt-4">
+        <h2 class="me-3">Batteries by Status</h2>
+        <div class="row g-3">
+            {% for column in status_columns %}
+            <div class="col-12 col-md-6 col-lg-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span class="fw-semibold">{{ column.status }}</span>
+                        <span class="badge text-bg-secondary">{{ column.count }}</span>
+                    </div>
+                    <div class="card-body p-2" style="max-height: 60vh; overflow-y: auto;">
+                        {% if column.cards %}
+                            {% for battery in column.cards %}
+                            <div class="card mb-2">
+                                <div class="card-body p-2 text-start">
+                                    <div class="fw-semibold">{{ battery.name }}</div>
+                                    <div class="text-muted small">{{ battery.asset_tag }}</div>
+                                    <div class="small">Location: {{ battery.location }}</div>
+                                    <div class="small">In status: {{ battery.elapsed_display }}</div>
+                                    <button class="btn btn-sm btn-primary mt-2 batteryModalButton" data-bs-toggle="modal"
+                                        data-bs-target="#batteryModal" data-battery-id="{{ battery.id }}">Info</button>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <p class="text-muted mb-0">No batteries in this status.</p>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -38,7 +54,12 @@ Home
 {% endblock %}
 
 {% block scripts %}
+<script type="application/json" id="trackedTeamKeysData">{{ tracked_team_keys | tojson }}</script>
 <script nonce="{{ csp_nonce() }}">
+const trackedTeamKeysRaw = JSON.parse(
+    document.getElementById('trackedTeamKeysData')?.textContent || '""'
+);
+
 // Fetch TBA matches and list assigned batteries on the homepage
 function formatAssignedMatchLabel(match) {
     if (!match) return 'Unknown match';
@@ -50,9 +71,70 @@ function formatAssignedMatchLabel(match) {
     return match.key || 'Unknown match';
 }
 
+function normalizeTeamKey(key) {
+    if (key === null || key === undefined) return '';
+    return key.toString().trim().replace(/^frc/i, '').toLowerCase();
+}
+
+function normalizeTeamDisplay(key) {
+    if (key === null || key === undefined) return '';
+    return key.toString().trim().replace(/^frc/i, '');
+}
+
+function parseTrackedTeamKeys(rawKeys) {
+    if (!rawKeys) return [];
+    return rawKeys
+        .split(',')
+        .map(normalizeTeamKey)
+        .filter(Boolean);
+}
+
+function getMatchSortTuple(match) {
+    const levelOrder = { qm: 0, ef: 1, qf: 2, sf: 3, f: 4 };
+    const level = (match?.comp_level || '').toLowerCase();
+    const levelRank = Object.prototype.hasOwnProperty.call(levelOrder, level) ? levelOrder[level] : 99;
+    const setNumber = Number.isFinite(Number(match?.set_number)) ? Number(match.set_number) : 0;
+    const matchNumber = Number.isFinite(Number(match?.match_number)) ? Number(match.match_number) : 0;
+    return [levelRank, setNumber, matchNumber];
+}
+
+function compareSortTuple(a, b) {
+    for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        const av = a[i] ?? 0;
+        const bv = b[i] ?? 0;
+        if (av < bv) return -1;
+        if (av > bv) return 1;
+    }
+    return 0;
+}
+
+function trackedTeamBadgesForMatch(match, trackedTeamKeys) {
+    if (!trackedTeamKeys.length || !match) return [];
+    const redTeams = (match.red_alliance || []).map(normalizeTeamKey);
+    const blueTeams = (match.blue_alliance || []).map(normalizeTeamKey);
+    const badges = [];
+    trackedTeamKeys.forEach(team => {
+        if (redTeams.includes(team)) {
+            badges.push({ team: normalizeTeamDisplay(team), alliance: 'red' });
+        } else if (blueTeams.includes(team)) {
+            badges.push({ team: normalizeTeamDisplay(team), alliance: 'blue' });
+        }
+    });
+    return badges;
+}
+
+function renderTeamBadgesHtml(badges) {
+    if (!badges || !badges.length) return '';
+    return badges.map(badge => {
+        const css = badge.alliance === 'red' ? 'text-bg-danger' : 'text-bg-primary';
+        return `<span class="badge rounded-pill ${css} me-1">${badge.team} ${badge.alliance}</span>`;
+    }).join('');
+}
+
 async function loadAssignedBatteries() {
     const listEl = document.getElementById('assignedBatteriesList');
     const emptyEl = document.getElementById('assignedBatteriesEmpty');
+    const trackedTeamKeys = parseTrackedTeamKeys(trackedTeamKeysRaw);
     try {
         const resp = await fetch('/api/tba/matches');
         if (!resp.ok) {
@@ -60,28 +142,68 @@ async function loadAssignedBatteries() {
             return;
         }
         const data = await resp.json();
-        const matches = data.matches || [];
+        const matches = (data.matches || []).slice().sort((a, b) =>
+            compareSortTuple(getMatchSortTuple(a), getMatchSortTuple(b))
+        );
         const batteryMap = new Map();
         matches.forEach(m => {
             if (m.assigned_battery) {
                 const b = m.assigned_battery;
-                const existing = batteryMap.get(b.id) || { battery: b, matches: [] };
-                existing.matches.push(formatAssignedMatchLabel(m));
+                const existing = batteryMap.get(b.id) || {
+                    battery: b,
+                    matches: [],
+                    sortTuple: getMatchSortTuple(m),
+                    teamBadges: [],
+                };
+                existing.matches.push({
+                    label: formatAssignedMatchLabel(m),
+                    sortTuple: getMatchSortTuple(m),
+                });
+                if (compareSortTuple(getMatchSortTuple(m), existing.sortTuple) < 0) {
+                    existing.sortTuple = getMatchSortTuple(m);
+                }
+                existing.teamBadges.push(...trackedTeamBadgesForMatch(m, trackedTeamKeys));
                 batteryMap.set(b.id, existing);
             }
         });
 
         if (batteryMap.size === 0) {
             emptyEl.innerText = 'No batteries are currently assigned to matches.';
+            listEl.style.display = 'none';
+            emptyEl.style.display = '';
             return;
         }
 
+        const batteryEntries = Array.from(batteryMap.values()).sort((a, b) =>
+            compareSortTuple(a.sortTuple, b.sortTuple)
+        );
+
         listEl.innerHTML = '';
-        batteryMap.forEach((val, id) => {
+        batteryEntries.forEach((val) => {
+            const id = val.battery.id;
+            const uniqueBadges = [];
+            const seen = new Set();
+            val.teamBadges.forEach(b => {
+                const key = `${b.team}|${b.alliance}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    uniqueBadges.push(b);
+                }
+            });
+            const sortedMatches = val.matches
+                .slice()
+                .sort((a, b) => compareSortTuple(a.sortTuple, b.sortTuple))
+                .map(m => m.label);
+
             const li = document.createElement('li');
-            li.className = 'list-group-item d-flex justify-content-between align-items-center';
+            li.className = 'list-group-item d-flex justify-content-between align-items-start gap-2';
             const left = document.createElement('div');
-            left.innerHTML = `<strong>${val.battery.name || ''}</strong> <small class="text-muted">${val.battery.asset_tag || ''}</small><br><small class="text-muted">Assigned to: ${val.matches.join(', ')}</small>`;
+            left.innerHTML = `
+                <strong>${val.battery.name || ''}</strong>
+                <small class="text-muted">${val.battery.asset_tag || ''}</small>
+                <div class="mt-1">${renderTeamBadgesHtml(uniqueBadges)}</div>
+                <small class="text-muted">Assigned to: ${sortedMatches.join(', ')}</small>
+            `;
             const btn = document.createElement('button');
             btn.className = 'btn btn-sm btn-primary';
             btn.type = 'button';
@@ -106,12 +228,22 @@ async function loadAssignedBatteries() {
         listEl.style.display = '';
     } catch (err) {
         emptyEl.innerText = 'Error loading assigned batteries.';
+        emptyEl.style.display = '';
+        listEl.style.display = 'none';
         console.error(err);
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     loadAssignedBatteries();
+    setInterval(loadAssignedBatteries, 5000);
+
+    setInterval(() => {
+        if (document.hidden) return;
+        if (document.querySelector('.modal.show')) return;
+        window.location.reload();
+    }, 5000);
+
     // Re-load list when matches are updated elsewhere (e.g., Load Matches page)
     document.addEventListener('matchesUpdated', () => loadAssignedBatteries());
 });
