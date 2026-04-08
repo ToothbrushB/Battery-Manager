@@ -187,101 +187,131 @@ function showBatteryInfoModal(batteryId) {
 
         document.getElementById('batteryNotes').innerText = data.notes;
 
-        const data2 = d3.csvParseRows(data.custom_fields['Battery Drain Curve'].value, function(d, i) {
-            return {
-            // time: +d[0],
-            voltage: +d[1], // Convert strings to numbers securely
-            // current: +d[2],
-            capacity: +d[3],
-            // temperature: +d[4]
-            };
-        });
 
-        if (data2.length > 0) {
-            chartConfig = {
-                type: 'line',
-                data: {
-                    datasets: [{
-                        data: data2,
-                        label: 'Battery Discharge',
-                        tension: 0.1,
-                        pointRadius: 0
-                    }],
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        title: {
-                            display: true,
-                            text: 'Voltage vs. Capacity Curve'
-                        },
+        fetch('/api/field_mappings').then(response => response.json()).then(mappings => {
+            const voltageCurveMapping = mappings.find(m => m.name === 'Voltage Curve');
+            if (!voltageCurveMapping || !voltageCurveMapping.db_column_name) {
+                showToast('Voltage Curve field mapping not found. Please contact the administrator.', 'Error', 'error');
+                return;
+            }
+            const mappingColumn = voltageCurveMapping.db_column_name;
+            const customFields = data.custom_fields || {};
+            const mappedField = Object.values(customFields).find(field => {
+                if (!field) return false;
+                const dbColumn = field.db_column_name || field.field;
+                return dbColumn === mappingColumn;
+            });
+
+            const csvContent = (mappedField && typeof mappedField.value === 'string')
+                ? mappedField.value.trim()
+                : '';
+
+            let chartData = csvContent ? d3.csvParseRows(csvContent, function (d) {
+                return {
+                    // time: +d[0],
+                    voltage: +d[1], // Convert strings to numbers securely
+                    // current: +d[2],
+                    capacity: +d[3],
+                    // temperature: +d[4]
+                };
+            }) : [];
+
+            chartData = chartData.filter(point => Number.isFinite(point.voltage) && Number.isFinite(point.capacity));
+
+            if (chartData.length > 0) {
+                chartConfig = {
+                    type: 'line',
+                    data: {
+                        datasets: [{
+                            data: chartData,
+                            label: 'Battery Discharge',
+                            tension: 0.1,
+                            pointRadius: 0
+                        }],
                     },
-                    interaction: {
-                        intersect: false,
-                    },
-                    scales: {
-                        x: {
-                            type: 'linear',
-                            display: true,
+                    options: {
+                        responsive: true,
+                        plugins: {
                             title: {
                                 display: true,
-                                text: 'Capacity (Ah)'
+                                text: 'Voltage vs. Capacity Curve'
+                            },
+                        },
+                        interaction: {
+                            intersect: false,
+                        },
+                        scales: {
+                            x: {
+                                type: 'linear',
+                                display: true,
+                                title: {
+                                    display: true,
+                                    text: 'Capacity (Ah)'
+                                },
+                                suggestedMin: 0,
+                                suggestedMax: 10
+                            },
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                title: {
+                                    display: true,
+                                    text: 'Voltage (V)'
+                                },
+                                suggestedMin: 0,
+                                suggestedMax: 14
                             }
                         },
-                        y: {
-                            type: 'linear',
-                            display: true,
-                            title: {
-                                display: true,
-                                text: 'Voltage (V)'
-                            },
-                            suggestedMin: 0,
-                            suggestedMax: 14
+                        parsing: {
+                            xAxisKey: 'capacity',
+                            yAxisKey: 'voltage'
                         }
                     },
-                    parsing: {
-                        xAxisKey: 'capacity',
-                        yAxisKey: 'voltage'
-                    }
-                },
-            };
-        }
-        let chartCanvas = document.getElementById('batteryModalChart');
-        if (chartCanvas) {
-            // If a Chart instance already exists for this canvas, destroy it first
-            try {
-                const existing = Chart.getChart(chartCanvas);
-                if (existing) existing.destroy();
-            } catch (e) {
-                // ignore
+                };
             }
-
-            // Ensure there is a message element to show when no data is available
-            let msgEl = document.getElementById('batteryModalChartMessage');
-            if (!msgEl) {
-                msgEl = document.createElement('div');
-                msgEl.id = 'batteryModalChartMessage';
-                msgEl.className = 'text-muted small text-center mt-2';
-                chartCanvas.parentElement.appendChild(msgEl);
-            }
-
-            // Create chart only if config has datasets
-            if (chartConfig && chartConfig.data && chartConfig.data.datasets && chartConfig.data.datasets.length > 0) {
-                msgEl.innerText = '';
-                chartCanvas.style.display = '';
-                chart = new Chart(chartCanvas, chartConfig);
-            } else {
-                // No data: clear canvas and show friendly message but don't remove the canvas element
+            let chartCanvas = document.getElementById('batteryModalChart');
+            if (chartCanvas) {
+                // If a Chart instance already exists for this canvas, destroy it first
                 try {
-                    const ctx = chartCanvas.getContext && chartCanvas.getContext('2d');
-                    if (ctx) ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+                    const existing = Chart.getChart(chartCanvas);
+                    if (existing) existing.destroy();
                 } catch (e) {
                     // ignore
                 }
-                chartCanvas.style.display = 'none';
-                msgEl.innerText = 'No chart data available.';
+
+                // Ensure there is a message element to show when no data is available
+                let msgEl = document.getElementById('batteryModalChartMessage');
+                if (!msgEl) {
+                    msgEl = document.createElement('div');
+                    msgEl.id = 'batteryModalChartMessage';
+                    msgEl.className = 'text-muted small text-center mt-2';
+                    chartCanvas.parentElement.appendChild(msgEl);
+                }
+
+                // Create chart only if config has datasets
+                if (chartConfig && chartConfig.data && chartConfig.data.datasets && chartConfig.data.datasets.length > 0) {
+                    msgEl.innerText = '';
+                    chartCanvas.style.display = '';
+                    chart = new Chart(chartCanvas, chartConfig);
+                } else {
+                    // No data: clear canvas and show friendly message but don't remove the canvas element
+                    try {
+                        const ctx = chartCanvas.getContext && chartCanvas.getContext('2d');
+                        if (ctx) ctx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+                    } catch (e) {
+                        // ignore
+                    }
+                    chartCanvas.style.display = 'none';
+                    msgEl.innerText = 'No chart data available.';
+                }
             }
-        }
+
+        }).catch(error => {
+            console.error('Error fetching field mappings:', error);
+            showToast('An error occurred while fetching field mappings.', 'Error', 'error');
+        })
+
+
 
         fetch('/api/locations').then(response => response.json()).then(locationsData => {
             const allowedLocations = locationsData.filter(location => location.allowed);
@@ -470,11 +500,21 @@ function showBatteryInfoModal(batteryId) {
                 const content = e.target.result;
                 const formElement = document.createElement('input');
                 formElement.type = 'hidden';
-                formElement.name = '_snipeit_battery_drain_curve_10';
-                formElement.value = content;
-                document.getElementById('batteryUpdateForm').appendChild(formElement);
-                showToast('Battery drain curve uploaded. Please click Update to save changes.', 'Upload Successful', 'success');
-            };
+                fetch('/api/field_mappings').then(response => response.json()).then(mappings => {
+                    const voltageCurveMapping = mappings.find(m => m.name === 'Voltage Curve');
+                    if (!voltageCurveMapping) {
+                        showToast('Voltage Curve field mapping not found. Please contact the administrator.', 'Error', 'error');
+                        return;
+                    }
+                    formElement.name = voltageCurveMapping.db_column_name;
+                    formElement.value = content;
+                    document.getElementById('batteryUpdateForm').appendChild(formElement);
+                    showToast('Battery voltage curve uploaded. Please click Update to save changes.', 'Upload Successful', 'success');
+                }).catch(error => {
+                    console.error('Error fetching field mappings:', error);
+                    showToast('An error occurred while fetching field mappings.', 'Error', 'error');
+                })
+            }
             reader.readAsText(file);
 
 

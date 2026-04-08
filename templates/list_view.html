@@ -135,7 +135,7 @@ async function refreshBatteryList() {
     const statusEl = document.getElementById('listRefreshStatus');
     try {
         const [batteryResp, fieldResp] = await Promise.all([
-            fetch('/api/batteries'),
+            fetch('/api/battery'),
             fetch('/api/custom_fields')
         ]);
         if (!batteryResp.ok) {

@@ -416,7 +416,7 @@ async function openAssignmentModal(match) {
     multiCheckbox.onchange = refreshSelectionState;
 
     try {
-        const resp = await fetch('/api/batteries');
+        const resp = await fetch('/api/battery');
         allAssignableBatteries = await resp.json();
 
         batterySelectList.innerHTML = '';

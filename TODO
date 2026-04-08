@@ -4,7 +4,6 @@ get status of modem/WAN connection
 recommendation algorithm for batteries
 shutdown/restart capabilities
 login/logout
-dockerize!!!
 
 https://github.com/svbnet/netgear-sms
 https://github.com/amelchio/eternalegypt

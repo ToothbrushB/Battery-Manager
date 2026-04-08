@@ -123,6 +123,31 @@ def trigger_sync():
             status = sync_job.get_status()
             return jsonify({"status": status}), 200
 
+@api.route("/location", methods=["GET"])
+def location_info():
+    with sqlalchemy.orm.Session(engine) as db_session:
+        locations = db_session.query(LocationDb).all()
+        location_list = []
+        for loc in locations:
+            decoded = msgspec.msgpack.decode(loc.remote_data, type=Location)
+            decoded.allowed = loc.allowed
+            location_list.append(decoded)
+        return Response(
+            msgspec.json.encode(location_list), 200, mimetype="application/json"
+        )
+
+@api.route("/location/<int:location_id>", methods=["GET"])
+def get_location_info(location_id):
+    with sqlalchemy.orm.Session(engine) as db_session:
+        loc = db_session.get(LocationDb, location_id)
+        if not loc:
+            return jsonify({"message": "Location not found", "status": "error"}), 404
+        decoded = msgspec.msgpack.decode(loc.remote_data, type=Location)
+        decoded.allowed = loc.allowed
+        return Response(
+            msgspec.json.encode(decoded), 200, mimetype="application/json"
+        )
+
 @api.route("/qr_scan", methods=["POST"])
 def qr_scan():
     """Handle QR code scan"""
@@ -318,7 +343,26 @@ def get_status_labels():
             msgspec.json.encode(status_labels), 200, mimetype="application/json"
         )
         
-
+        
+@api.route("/field_mappings", methods=["GET"])
+def get_field_mappings():
+    with engine.connect() as connection:
+        query = sqlalchemy.select(FieldMappingDb)
+        result = connection.execute(query).fetchall()
+        
+        #turn result into json array
+        field_mappings = []
+        for row in result:
+            field_mapping = {
+                "id": row.id,
+                "name": row.name,
+                "db_column_name": row.db_column_name,
+            }
+            field_mappings.append(field_mapping)
+            
+        return Response(
+            msgspec.json.encode(field_mappings), 200, mimetype="application/json"
+        )
 
 def get_ip_addresses(): #code snippet from ai overview
     ip_info = {}
@@ -379,7 +423,7 @@ def get_status():
 
 
 
-@api.route("/batteries", methods=["GET"])
+@api.route("/battery", methods=["GET"])
 def get_batteries():
     """Retrieve batteries filtered by allowed statuses and locations."""
     def parse_ts(value: str | None) -> float | None:
@@ -535,7 +579,7 @@ def get_tba_matches():
 
 @api.route("/tba/assign_battery", methods=["POST"])
 def assign_battery_to_match():
-    """Assign a battery to a match and update the battery notes for Snipe-IT sync."""
+    """Assign a battery to a match and update the battery match for Snipe-IT sync."""
     data = request.json or {}
     match_key = data.get('match_key')
     battery_id = data.get('battery_id')
@@ -567,6 +611,11 @@ def assign_battery_to_match():
             db_session.query(MatchBatteryAssignmentDb).filter_by(match_key=match.key).delete()
             match.assigned_battery_id = selected_ids[0] if selected_ids else None
 
+            match_field_mapping = db_session.query(FieldMappingDb).filter_by(name="Match Key").first()
+            if not match_field_mapping:
+                return jsonify({"message": "Match field mapping not found", "status": "error"}), 400
+                    
+            match_field_mapping_name = db_session.query(CustomFieldDb).filter_by(db_column_name=match_field_mapping.db_column_name).first().name if match_field_mapping and match_field_mapping.db_column_name else None
             for idx, selected_id in enumerate(selected_ids):
                 battery = db_session.get(BatteryDb, selected_id)
                 if not battery:
@@ -581,11 +630,8 @@ def assign_battery_to_match():
                 )
 
                 if battery.remote_data:
-                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
-                    existing_notes = asset.notes or ''
-                    lines = [l for l in existing_notes.split('\n') if not l.startswith('Match: ')]
-                    lines.append(f'Match: {match_key}')
-                    asset.notes = '\n'.join(lines).strip()
+                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)   
+                    asset.custom_fields[match_field_mapping_name].value = match_key
                     battery.remote_data = msgspec.msgpack.encode(asset)
 
                 battery.sync_status = "local_updated"
@@ -601,13 +647,8 @@ def assign_battery_to_match():
                     return jsonify({"message": "Battery not found", "status": "error"}), 404
 
                 if battery.remote_data:
-                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)
-                    existing_notes = asset.notes or ''
-                    # Remove any previous match assignment line then append new one
-                    lines = [l for l in existing_notes.split('\n') if not l.startswith('Match: ')]
-                    lines.append(f'Match: {match_key}')
-                    asset.notes = '\n'.join(lines).strip()
-                    # TODO. Need to update battery usage type to "Competition"
+                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)   
+                    asset.custom_fields[match_field_mapping_name].value = match_key
                     battery.remote_data = msgspec.msgpack.encode(asset)
 
                 battery.sync_status = "local_updated"

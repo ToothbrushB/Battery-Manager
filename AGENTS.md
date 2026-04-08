@@ -2,635 +2,283 @@
 
 ## Overview
 
-Battery Manager is a Flask-based web application designed to manage batteries for FRC (FIRST Robotics Competition) teams. It provides a user-friendly interface for tracking battery inventory, status, locations, and custom fields while synchronizing with a Snipe-IT asset management server.
+Battery Manager is a Flask application for managing FRC batteries synced from Snipe-IT. It now includes battery history tracking, checkout/check-in workflows, and The Blue Alliance (TBA) match assignment support in addition to core inventory views.
 
-### Key Features
-- Real-time synchronization with Snipe-IT asset management
-- QR code scanning for quick battery lookup
-- Custom field management and display
-- Location and status tracking
-- User authentication and session management
-- Background job processing with Redis Queue
-- RESTful API for frontend interactions
+## Key Features
+
+- Snipe-IT battery synchronization (download + upload of local edits)
+- QR code scan workflow for battery lookup
+- Editable custom fields with per-field visibility modes
+- Allowed status/location filtering and hidden battery support
+- Battery checkout/check-in to allowed assets
+- Battery history snapshots with assignment/location/status change visibility
+- TBA integration:
+  - Event and match synchronization
+  - Single and multi-battery assignment per match
+  - Homepage sections for active and completed assigned batteries
+- Background jobs via Redis Queue for ping, hardware sync, and TBA sync
+- REST API used by frontend pages and modals
 
 ---
 
 ## Technology Stack
 
 ### Backend
-- **Flask 3.1.2** - Web framework
-- **SQLAlchemy 2.0.44** - ORM for database operations
-- **Redis 7.0.1** - Caching and session storage
-- **RQ (Redis Queue) 2.6.1** - Background task processing
-- **RQ Scheduler 0.14.0** - Scheduled job management
+- Flask 3.x
+- SQLAlchemy 2.x
+- Redis + RQ
+- msgspec
+- httpx
+- pythonping
 
 ### Frontend
-- **Bootstrap 5.x** - UI framework
-- **html5-qrcode** - QR code scanning functionality
-- **Chart.js** - Data visualization
-- **D3.js** - Advanced visualizations
-- **Feather Icons** - Icon library
+- Bootstrap 5
+- html5-qrcode
+- Chart.js
+- D3.js
+- Feather Icons
 
 ### Security
-- **Flask-SeaSurf 2.0.0** - CSRF protection
-- **Flask-Talisman 1.1.0** - Security headers and CSP
-- **Werkzeug 3.1.4** - Password hashing
-
-### Data & Communication
-- **msgspec 0.20.0** - Fast JSON/MessagePack serialization
-- **httpx 0.28.1** - Async HTTP client for Snipe-IT integration
+- Flask-SeaSurf (CSRF)
+- Flask-Talisman (CSP + security headers)
+- Werkzeug password hashing
 
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       Flask Application                      │
-├─────────────────────────────────────────────────────────────┤
-│  app.py (Main Routes)  │  api.py (REST API)                 │
-├─────────────────────────────────────────────────────────────┤
-│  helpers.py            │  preferences.py  │  sync.py        │
-├─────────────────────────────────────────────────────────────┤
-│                    SQLAlchemy ORM Layer                      │
-│                      (models.py)                             │
-├─────────────────────────────────────────────────────────────┤
-│                    SQLite Database                           │
-└─────────────────────────────────────────────────────────────┘
-         ↕                    ↕                    ↕
-   Redis/RQ Queue      Snipe-IT Server      Frontend Templates
+Flask App
+├── app.py                  # Page routes + auth + settings pages
+├── api.py                  # REST API blueprint
+├── sync.py                 # Snipe-IT sync + upload/check-in/check-out
+├── tba_sync.py             # TBA match cache synchronization
+├── tba.py                  # TBA client wrapper
+├── preferences.py          # Preference and field mapping management
+├── helpers.py              # HTTP helpers, ping, utilities
+└── models.py               # SQLAlchemy models + msgspec DTOs
 ```
+
+Data stores:
+- Primary SQL database (SQLite by default)
+- Redis (session store + queue backend)
 
 ---
 
 ## Core Components
 
-### 1. Main Application (`app.py`)
+### 1. Main App (`app.py`)
 
-**Purpose**: Primary Flask application with user-facing routes
+Primary page routes:
+- `/` Home dashboard:
+  - Batteries by status with elapsed time in current status
+  - Batteries assigned to upcoming/completed matches
+- `/list_view` Table view
+- `/grid_view` Placeholder grid view
+- `/history` Battery change history table (recent entries)
+- `/history/clear` Clear history entries
+- `/settings` Preferences, field configuration, allowed locations/statuses, hidden batteries
+- `/load_matches` Match page with assignment workflow
+- `/login`, `/register`, `/logout`
 
-**Key Routes**:
-- `/` - Homepage with recommended batteries
-- `/list_view` - Table view of all batteries
-- `/grid_view` - Grid/card layout view
-- `/settings` - Configuration interface
-- `/login`, `/register`, `/logout` - Authentication
-- `/load_matches` - Match schedule integration (planned)
-
-**Features**:
-- Session management with Redis
-- CSRF protection via SeaSurf
-- Content Security Policy (CSP) with Flask-Talisman
-- User authentication with password hashing
-- Settings management for custom fields, locations, statuses
+Notable behavior:
+- Build/version string in footer via `git describe`
+- No-cache response headers on all responses
 
 ### 2. API Blueprint (`api.py`)
 
-**Purpose**: RESTful API endpoints for frontend and background operations
+Core endpoints:
+- Sync and status:
+  - `GET/POST /api/sync`
+  - `GET /api/status`
+- Batteries:
+  - `GET /api/battery`
+  - `GET/PUT /api/battery/<battery_id>`
+  - `GET /api/checkout_targets`
+- Metadata:
+  - `GET /api/locations`
+  - `GET /api/location`
+  - `GET /api/location/<location_id>`
+  - `GET /api/status_labels`
+  - `GET /api/custom_fields`
+  - `GET /api/field_mappings`
+- Scan and tagging:
+  - `POST /api/qr_scan`
+  - `POST /api/register_tag`
+- TBA:
+  - `GET /api/tba/events`
+  - `GET /api/tba/matches`
+  - `POST /api/tba/assign_battery`
+  - `GET/POST /api/tba/sync`
 
-**Endpoints**:
-- `POST/GET /api/sync` - Trigger or check status of Snipe-IT sync
-- `POST /api/qr_scan` - Process QR code scans
-- `POST /api/register_tag` - Register NFC tags to batteries
+### 3. Sync Engine (`sync.py`)
 
-**Background Jobs**:
-- Scheduled sync with Snipe-IT every 5 minutes (300s)
-- Periodic ping checks every 60 seconds
-- Job tracking via Redis Queue
+`download_hardware_changes()` performs:
+1. Pull assets/fields/locations/status labels from Snipe-IT.
+2. Merge into local DB with conflict handling.
+3. Queue local-modified batteries for remote upload.
+4. Process pending checkouts/check-ins.
+5. Upload local changes in batches.
 
-### 3. Data Models (`models.py`)
+### 4. TBA Sync (`tba_sync.py`, `tba.py`)
 
-**Database Tables** (SQLAlchemy ORM):
+- Pulls match data for configured event key.
+- Upserts `MatchDb` rows while preserving assignment state.
+- Updates `last_tba_sync_at` in key-value storage.
 
-| Table | Purpose |
-|-------|---------|
-| `UserDb` | User authentication credentials |
-| `BatteryDb` | Battery assets with sync status |
-| `LocationDb` | Physical locations (hierarchical) |
-| `StatusLabelDb` | Battery status types |
-| `CustomFieldDb` | Configurable fields for batteries |
-| `PreferenceDb` | Application settings/preferences |
-| `KVStoreDb` | Key-value storage for app state |
-| `FieldMappingDb` | Special field mappings |
+### 5. Preferences (`preferences.py`)
 
-**Sync Status Tracking**:
-- `new` - Newly downloaded from Snipe-IT
-- `remote_updated` - Updated from remote server
-- `remote_uploaded` - Local changes uploaded to server
-- Timestamps: `local_modified_at`, `remote_modified_at`, `last_synced_at`
+- Persists settings from `config.json` into DB.
+- Manages:
+  - allowed checkout assets preference
+  - hidden battery asset IDs
+  - field mapping defaults (Usage Type, Voltage Curve, Cycle Count, Match Key)
 
-**Data Transfer Objects** (msgspec Structs):
-- `Asset`, `Battery`, `Location`, `StatusLabel`, `CustomField`
-- `User`, `Company`, `Department`, `Manufacturer`
-- Optimized serialization with msgspec (JSON/MessagePack)
+### 6. Models (`models.py`)
 
-### 4. Synchronization Engine (`sync.py`)
+Primary tables:
+- `UserDb`
+- `BatteryDb`
+- `BatteryHistoryDb`
+- `LocationDb`
+- `StatusLabelDb`
+- `CustomFieldDb`
+- `PreferenceDb`
+- `FieldMappingDb`
+- `KVStoreDb`
+- `EventDb`
+- `MatchDb`
+- `MatchBatteryAssignmentDb`
 
-**Purpose**: Bi-directional sync between local database and Snipe-IT
-
-**Key Function**: `download_hardware_changes()`
-1. Fetches assets from Snipe-IT (filtered by battery model ID)
-2. Downloads custom fields, locations, status labels
-3. Processes location hierarchy (parent-child relationships)
-4. Detects local changes and prevents overwrite
-5. Queues modified batteries for upload
-
-**Conflict Resolution**:
-- Compares `local_modified_at` vs `remote_modified_at`
-- Prioritizes local changes over remote updates
-- Flags conflicts with `sync_status`
-
-### 5. Helper Functions (`helpers.py`)
-
-**Snipe-IT Integration**:
-- `snipe_it_get()` - Synchronous GET requests
-- `snipe_it_get_async()` - Async GET with httpx
-- `snipe_it_put_async()` - Async PUT for updates
-- `fetch_all()` - Paginated data fetching with concurrency control
-
-**Utilities**:
-- `ping()` - Network connectivity checks
-
-### 6. Preferences System (`preferences.py`)
-
-**Purpose**: Centralized configuration management
-
-**Functions**:
-- `get_preference(key)` - Retrieve setting value
-- `set_preference(key, value)` - Update/create setting
-- `load_settings_from_config()` - Initialize from `config.json`
-
-**Common Preferences**:
-- `snipe-api-key` - Authentication for Snipe-IT
-- `snipe-url` - Snipe-IT server base URL
-- `battery-model-id` - Filter for battery assets
-- `tba-api-key` - The Blue Alliance API key (for match scheduling)
-
-### 7. The Blue Alliance Integration (`tba.py`)
-
-**Purpose**: Fetch FRC competition data
-
-**Status**: Partially implemented
-- `get_team(team_key)` - Get team information
-- `tba_request(endpoint)` - Generic TBA API calls
-
-**Planned Features**:
-- Match schedule sync
-- Battery allocation based on match timeline
-
-### 8. Hardware Reader (`reader.py`)
-
-**Purpose**: I2C hardware integration for automated tracking
-
-**Component**: TCA9548A I2C multiplexer support
-
-**Status**: Prototype/experimental
-- Intended for automatic battery location detection
-- NFC tag registration support in API
+Schema helper functions currently ensure missing columns/tables at runtime:
+- checkout columns
+- history columns
+- match assignment table
 
 ---
 
-## Database Schema
+## Current Workflows
 
-### Entity Relationships
+### Battery Update Workflow
+1. User opens battery modal.
+2. User edits status/location/notes/custom fields/checkout target.
+3. Frontend sends `PUT /api/battery/<id>`.
+4. API updates stored asset payload, marks `sync_status=local_updated`, records history entry.
+5. Next sync uploads update to Snipe-IT.
 
-```
-UserDb (authentication)
+### Checkout/Check-in Workflow
+1. User chooses checkout target (or clears it).
+2. API updates local checkout state and pending marker.
+3. Sync worker posts checkout/check-in to Snipe-IT.
+4. Pending marker is cleared on success and history reflects transition.
 
-BatteryDb
-  ├─ location_id → LocationDb.id
-  └─ Custom fields (stored in remote_data blob)
-
-LocationDb (self-referential)
-  └─ parent_id → LocationDb.id
-
-StatusLabelDb (status types)
-
-CustomFieldDb (field definitions)
-  └─ config (HIDE/DISPLAY/EDIT)
-
-PreferenceDb (key-value settings)
-
-FieldMappingDb (special field mappings)
-  └─ db_column_name
-```
-
-### Custom Fields Configuration
-
-Each custom field has a `config` enum:
-- `HIDE` - Not displayed to users
-- `DISPLAY` - Read-only display
-- `EDIT` - User-editable field
+### Match Assignment Workflow
+1. User opens Load Matches page and syncs/loads matches.
+2. User assigns one or multiple batteries to a match.
+3. Assignment rows are stored in `MatchBatteryAssignmentDb`.
+4. Mapped custom field (`Match Key`) is updated on assigned batteries.
+5. Homepage shows assigned batteries by active vs completed matches.
 
 ---
 
-## Frontend Structure
+## Background Jobs (RQ)
 
-### Templates (Jinja2)
+Current periodic scheduling in `api.py`:
+- `periodic_ping` every 5s (`helpers.ping`)
+- `periodic_hardware_sync` every 60s (`sync.download_hardware_changes`)
+- `periodic_tba_sync` every 60s (`tba_sync.download_match_updates`)
 
-| Template | Purpose |
-|----------|---------|
-| `layout.html` | Base template with navigation, CSP nonces |
-| `index.html` | Homepage with recommended batteries |
-| `list_view.html` | Tabular battery listing |
-| `grid_view.html` | Card-based battery display |
-| `settings.html` | Admin configuration interface |
-| `login.html` / `register.html` | Authentication forms |
-| `modals.html` | Reusable modal dialogs |
-| `load_matches.html` | Match schedule viewer (planned) |
-
-### Static Assets
-
-**JavaScript**:
-- `qr_reader.js` - QR code scanning implementation
-- `sync.js` - Frontend sync status polling
-- `chart.umd.min.js` - Charting library
-- `d3.min.js` - Data visualization
-
-**Stylesheets**:
-- `bootstrap.min.css` - UI framework
-- `bootstrap-icons.min.css` - Icons
-- `styles.css` - Custom styles
+Job IDs are tracked in `KVStoreDb` for status polling.
 
 ---
 
-## Key Workflows
+## Frontend Pages and Assets
 
-### 1. Sync Workflow
+Templates:
+- `templates/index.html` - Home dashboard with status columns + assigned batteries
+- `templates/list_view.html` - List/table battery view
+- `templates/grid_view.html` - Grid placeholder
+- `templates/history.html` - Change history
+- `templates/load_matches.html` - Match management and assignment
+- `templates/settings.html` - Preferences and admin settings
 
-```
-1. RQ Scheduler triggers sync.download_hardware_changes() every 5 minutes
-2. Fetch assets from Snipe-IT API (filtered by model_id)
-3. Fetch custom fields, locations, status labels
-4. For each entity:
-   a. Check if exists in local DB
-   b. If new → Create with sync_status="new"
-   c. If exists → Compare timestamps
-      - Local changes detected? Queue for upload
-      - Remote newer? Update local copy
-5. Batch upload modified assets to Snipe-IT
-```
-
-### 2. QR Code Scan Workflow
-
-```
-1. User scans QR code via html5-qrcode (qr_reader.js)
-2. Frontend sends code to POST /api/qr_scan
-3. API parses QR data:
-   - URL format: /hardware/{id} or /location/{id}
-   - Numeric: Battery ID
-4. Return battery details from BatteryDb
-5. Display in frontend modal/view
-```
-
-### 3. Settings Update Workflow
-
-```
-1. User navigates to /settings (requires authentication)
-2. Load current preferences from PreferenceDb
-3. Display custom fields with HIDE/DISPLAY/EDIT toggles
-4. Display locations with "allowed" checkboxes
-5. Display status labels with "allowed" checkboxes
-6. On submit (POST /settings):
-   a. Update preferences
-   b. Update field configs
-   c. Update allowed locations/statuses
-   d. Commit to database
-```
+Primary scripts:
+- `static/sync.js` - status polling, battery modal, updates
+- `static/qr_reader.js` - scan workflow
+- `static/tba.js` - event/match loading + assignment UI
 
 ---
 
-## Configuration Files
+## Configuration
 
-### `config.json`
+### Environment Variables
+- `DATABASE_URL`
+- `REDIS_HOST`
+- `REDIS_PORT`
+- `FLASK_SECRET_KEY`
 
-Structured settings template loaded into database:
-```json
-[
-  {
-    "section": "Snipe-IT Integration",
-    "settings": [
-      {"id": "snipe-url", "name": "Snipe-IT URL", "value": ""},
-      {"id": "snipe-api-key", "name": "API Key", "value": ""}
-    ]
-  }
-]
-```
-
-### `.env` (Environment Variables)
-
-Required variables:
-- `DATABASE_URL` - SQLAlchemy connection string
-- `REDIS_HOST` - Redis server hostname
-- `REDIS_PORT` - Redis port (default 6379)
-- `FLASK_SECRET_KEY` - Session encryption key
-
-### `Dockerfile`
-
-Containerization support for deployment
+### Database-Backed Preferences (Examples)
+- `snipe-url`
+- `snipe-api-key`
+- `battery-model-id`
+- `asset-checkout-allowed`
+- `tba-api-key`
+- `tba-event-key`
+- `tba-team-key`
 
 ---
 
-## Security Features
+## Known Caveats / Technical Debt
 
-### Authentication
-- Password hashing with Werkzeug's `generate_password_hash()`
-- Session-based authentication stored in Redis
-- User registration with password confirmation
-
-### CSRF Protection
-- Flask-SeaSurf generates CSRF tokens
-- Tokens required for all POST requests
-
-### Content Security Policy
-- Flask-Talisman enforces CSP headers
-- Nonces for inline scripts/styles
-- Restricts resource loading to trusted sources
-
-### Session Security
-- Redis-backed sessions (server-side storage)
-- `no-cache` headers on all responses
-- Secure session cookies
+- Several modules perform DB setup and scheduler setup at import time.
+- Auth decorators are defined but not consistently enforced on all routes.
+- API/frontend contract drift exists in some places (example: singular vs plural battery endpoint naming).
+- Some UI controls expected by JS are not present in template markup.
+- Runtime schema mutation helpers should eventually be replaced with proper migrations.
+- Test coverage is currently minimal.
 
 ---
 
-## Background Jobs (Redis Queue)
+## Planned / Incomplete Areas
 
-### Scheduled Jobs
-
-| Job | Interval | Function |
-|-----|----------|----------|
-| Ping check | 60s | `helpers.ping()` |
-| Snipe-IT sync | 300s (5min) | `sync.download_hardware_changes()` |
-
-### Job Management
-- Jobs tracked in Redis with unique IDs
-- Job status stored in `KVStoreDb` (e.g., `last_sync_job_id`)
-- Status checks via `/api/sync` endpoint
-- RQ Dashboard available for monitoring (`rq-dashboard` package)
-
----
-
-## API Reference
-
-### Sync Status Endpoint
-
-**GET/POST `/api/sync`**
-
-GET Response:
-```json
-{
-  "status": "queued|started|finished|failed"
-}
-```
-
-POST Response:
-```json
-{
-  "status": "Queued",
-  "message": "Sync initiated"
-}
-```
-
-### QR Scan Endpoint
-
-**POST `/api/qr_scan`**
-
-Request:
-```json
-{
-  "qr_data": "/hardware/123" | "123"
-}
-```
-
-Response:
-```json
-{
-  "id": 123,
-  "name": "Battery #5",
-  "asset_tag": "BAT-005",
-  "location": {...},
-  "status": {...},
-  "custom_fields": {...}
-}
-```
-
-### NFC Tag Registration
-
-**POST `/api/register_tag`**
-
-Request:
-```json
-{
-  "battery_id": 123,
-  "tag_id": "A1B2C3D4"
-}
-```
-
-Response:
-```json
-{
-  "status": "success",
-  "message": "Tag registered"
-}
-```
+1. Grid view battery cart mapping (drag/drop and spatial management)
+2. Hardware reader integration beyond prototype usage
+3. Deeper battery analytics and reporting
+4. Stronger role-based access model and auditing controls
 
 ---
 
 ## Development Setup
 
-### Prerequisites
-1. Python 3.10+
-2. Redis server
-3. SQLite (or PostgreSQL for production)
-4. Snipe-IT instance with API access
-
-### Installation Steps
-
 ```bash
-# 1. Install Redis
-brew install redis  # macOS
-# or apt-get install redis  # Linux
-
-# 2. Create virtual environment
+# 1) Create and activate environment
 python -m venv .venv
 source .venv/bin/activate
 
-# 3. Install dependencies
+# 2) Install dependencies
 pip install -r requirements.txt
 
-# 4. Configure environment
-cp .env.example .env
-# Edit .env with your settings
+# 3) Configure environment variables in .env
 
-# 5. Initialize database
-python -c "from app import app; app.app_context().push()"
-
-# 6. Start Redis
+# 4) Start Redis
 redis-server
 
-# 7. Run Flask application
+# 5) Run Flask app
 flask run
-
-# 8. (Optional) Run RQ Dashboard
-rq-dashboard
 ```
 
-### Database Initialization
-
-Database tables are automatically created on first run via:
-```python
-Base.metadata.create_all(engine)
-```
+Optional:
+- `rq-dashboard` for queue visibility
 
 ---
 
-## Planned Features (TODO)
+## Support References
 
-Based on README and code comments:
-
-1. **Grid View Location Mapping**
-   - Visual representation of battery cart
-   - Drag-and-drop battery placement
-
-2. **Match Schedule Integration**
-   - Sync with The Blue Alliance API
-   - Allocate batteries to matches
-   - Automated checkout recommendations
-
-3. **Hardware Integration**
-   - Automatic location detection via I2C sensors
-   - NFC tag reading for check-in/check-out
-   - Real-time battery status from hardware
-
-4. **Enhanced Reporting**
-   - Battery usage statistics
-   - Cycle count tracking
-   - Health/degradation metrics
+- Snipe-IT API: https://snipe-it.readme.io/reference
+- TBA API v3: https://www.thebluealliance.com/apidocs/v3
+- Flask: https://flask.palletsprojects.com/
+- Python RQ: https://python-rq.org/
 
 ---
 
-## File Structure Summary
-
-```
-Battery Manager/
-├── app.py                  # Main Flask application
-├── api.py                  # REST API blueprint
-├── models.py               # SQLAlchemy models & msgspec DTOs
-├── helpers.py              # Utility functions & Snipe-IT client
-├── sync.py                 # Sync engine
-├── preferences.py          # Settings management
-├── tba.py                  # The Blue Alliance integration
-├── reader.py               # Hardware I2C reader
-├── config.json             # Settings template
-├── requirements.txt        # Python dependencies
-├── Dockerfile              # Container configuration
-├── schema.sql              # Database schema reference
-├── README.md               # Basic project info
-├── TODO                    # Feature backlog
-├── templates/              # Jinja2 HTML templates
-│   ├── layout.html
-│   ├── index.html
-│   ├── list_view.html
-│   ├── grid_view.html
-│   ├── settings.html
-│   └── ...
-├── static/                 # Frontend assets
-│   ├── styles.css
-│   ├── qr_reader.js
-│   ├── sync.js
-│   ├── bootstrap.*
-│   ├── chart.umd.min.js
-│   └── ...
-└── models/                 # (Empty placeholder?)
-```
-
----
-
-## Common Development Tasks
-
-### Adding a New Custom Field
-
-1. Define field in Snipe-IT admin panel
-2. Run sync to download field definition
-3. Configure field visibility in `/settings`:
-   - HIDE - Field not shown
-   - DISPLAY - Read-only display
-   - EDIT - User can modify
-
-### Modifying Sync Behavior
-
-Edit `sync.py`:
-- Adjust sync interval in `api.py` scheduler
-- Modify conflict resolution logic in `download_hardware_changes()`
-- Add custom field processing rules
-
-### Adding API Endpoints
-
-1. Add route to `api.py` blueprint
-2. Implement handler function
-3. Update frontend JavaScript to call endpoint
-4. Add CSRF exemption if needed: `@csrf.exempt`
-
-### Customizing Views
-
-1. Edit templates in `templates/`
-2. Modify CSS in `static/styles.css`
-3. Update JavaScript in `static/*.js`
-4. Use Bootstrap 5 components for consistency
-
----
-
-## Troubleshooting
-
-### Sync Not Running
-- Check Redis connection: `redis-cli ping`
-- Verify RQ Scheduler is active: `rq-dashboard`
-- Check logs for API errors
-
-### Authentication Issues
-- Verify `FLASK_SECRET_KEY` is set
-- Clear Redis sessions: `redis-cli FLUSHALL`
-- Check password hashing algorithm
-
-### Snipe-IT Connection Errors
-- Verify API key in preferences
-- Check Snipe-IT URL format (include `/api/v1`)
-- Test connectivity: `curl -H "Authorization: Bearer YOUR_KEY" SNIPE_URL/hardware`
-
-### Database Migration
-- Backup database: `cp battery.db battery.db.backup`
-- Use SQLAlchemy migrations (Alembic) for schema changes
-- Or recreate: `rm battery.db && python app.py`
-
----
-
-## Contributing Guidelines
-
-### Code Style
-- Follow PEP 8 for Python code
-- Use type hints where applicable
-- Document functions with docstrings
-
-### Testing
-- Test sync operations with sample data
-- Verify CSRF protection on forms
-- Check mobile responsiveness
-
-### Security
-- Never commit `.env` file
-- Rotate API keys regularly
-- Validate user input server-side
-
----
-
-## Support & Resources
-
-- **Snipe-IT API Docs**: https://snipe-it.readme.io/reference
-- **The Blue Alliance API**: https://www.thebluealliance.com/apidocs/v3
-- **Flask Documentation**: https://flask.palletsprojects.com/
-- **Redis Queue**: https://python-rq.org/
-
----
-
-*Last Updated: March 12, 2026*
+Last Updated: April 8, 2026

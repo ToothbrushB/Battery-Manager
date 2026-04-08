@@ -92,17 +92,21 @@ def load_settings_from_config(config_path: str = "config.json") -> None:
     
     default_mappings = [
 FieldMappingDb(
-                name="Battery Usage Type",
+                name="Usage Type",
                 db_column_name="",
             ),
             FieldMappingDb(
-                name="Battery Voltage Curve",
+                name="Voltage Curve",
                 db_column_name="",
             ),
             FieldMappingDb(
-                name="Battery Cycle Count",
+                name="Cycle Count",
                 db_column_name="",
-            )
+            ),
+            FieldMappingDb(
+                name="Match Key",
+                db_column_name="",
+            ),
     ]
     with sqlalchemy.orm.Session(engine) as session:
         # Initialize field mappings if they don't exist
@@ -111,6 +115,10 @@ FieldMappingDb(
             if not any(m.name == default.name for m in existing_mappings):
                 session.add(default)
         
+        for mapping in existing_mappings:
+            if (mapping.name not in [m.name for m in default_mappings]):
+                session.delete(mapping)
+                
         # Initialize preferences from config
         existing_settings = session.query(PreferenceDb).all()
         existing_keys = {s.key for s in existing_settings}
