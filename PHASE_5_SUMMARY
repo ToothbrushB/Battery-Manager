@@ -1,0 +1,80 @@
+# Phase 5 Summary
+
+Date: April 10, 2026
+Status: Complete
+
+## Scope Delivered
+Implemented Phase 5 security and operations work across backend runtime, API protections, and observability endpoints.
+
+## Security Improvements
+
+1. CSP tightening in app startup:
+- Replaced wildcard image policy (`img-src *`) with explicit list (`'self'`, `data:`, `https:`).
+- Added `object-src 'none'`, `base-uri 'self'`, and `frame-ancestors 'none'`.
+- Kept nonce support for scripts.
+
+2. Secret management fail-fast:
+- App now validates `FLASK_SECRET_KEY` on startup.
+- Startup raises a clear runtime error if the secret key is missing.
+
+3. Role/permission model:
+- Added persistent `role` column on `UserDb` (`admin` or `viewer`).
+- Added runtime schema migration helper for existing databases.
+- Registration now assigns:
+  - first user => `admin`
+  - subsequent users => `viewer`
+- Added `admin_required` guard in web routes and applied it to:
+  - `/settings`
+  - `/history/clear`
+- Added admin checks for sensitive API mutations:
+  - `POST /api/sync`
+  - `POST /api/register_tag`
+  - `PUT /api/battery/<id>` and `PUT /api/batteries/<id>`
+  - `POST /api/tba/assign_battery`
+  - `POST /api/tba/sync`
+
+## Observability and Operations
+
+1. Structured JSON logging:
+- Added JSON log formatter for application logs.
+- Includes timestamp, level, logger, message, request metadata, and exception data when present.
+
+2. Request IDs:
+- Added request ID generation/propagation using `X-Request-ID`.
+- Request ID now attached to response headers and included in log records.
+
+3. Error tracking hooks:
+- Added centralized handlers for:
+  - HTTP exceptions (warning logs)
+  - unhandled exceptions (error logs + API-safe JSON response)
+
+4. Health endpoints:
+- Added web dependency health:
+  - `GET /api/health/web`
+  - `GET /api/v1/health/web`
+  - checks database and Redis connectivity.
+- Added worker dependency health:
+  - `GET /api/health/worker`
+  - `GET /api/v1/health/worker`
+  - checks Redis connectivity and active RQ worker presence.
+
+## Files Changed
+
+### Updated
+- `app.py`
+- `api.py`
+- `models.py`
+- `bootstrap_db.py`
+- `db/migrations.py`
+- `tests/test_auth.py`
+
+### Added
+- `PHASE_5_SUMMARY`
+
+## Validation
+
+1. Python compile checks passed:
+- `python3 -m py_compile app.py api.py models.py bootstrap_db.py db/migrations.py tests/test_auth.py`
+
+2. Editor diagnostics:
+- No errors in touched files.

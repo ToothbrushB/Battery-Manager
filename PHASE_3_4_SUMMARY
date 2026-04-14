@@ -1,0 +1,124 @@
+# Phase 3 and 4 Summary
+
+Date: April 10, 2026
+Status: Complete
+
+## Scope Delivered
+Implemented key Phase 3 API contract hardening and Phase 4 frontend reliability improvements with compatibility-preserving changes.
+
+---
+
+## Phase 3: API Contract Hardening
+
+### 1. Added consistent API response helpers
+In api.py:
+- api_success(message, data, status_code)
+- api_error(message, status_code, details)
+
+Used these for sync and TBA sync flows plus several validation/error paths to normalize status/message handling.
+
+### 2. Added defensive JSON validation
+Applied request body validation using request.get_json(silent=True) and dict checks for mutation endpoints:
+- /api/register_tag
+- /api/battery/<id> PUT
+- /api/tba/assign_battery
+
+Invalid or missing JSON now returns structured 400 error payloads.
+
+### 3. Added endpoint naming compatibility and API version aliases
+Added plural aliases and v1 aliases while keeping existing routes:
+- /api/battery and /api/batteries
+- /api/battery/<id> and /api/batteries/<id>
+- /api/v1/* aliases for key routes
+
+This stabilizes client compatibility while enabling future migration toward a versioned contract.
+
+### 4. Hardened query validation
+In /api/tba/events:
+- Added year integer parsing and explicit 400 on invalid values.
+
+### 5. Service-layer regression fixes discovered during review
+In services/tba_service.py:
+- Fixed unassignment behavior so stale match key custom field values are cleared from previously assigned batteries.
+
+In services/battery_service.py:
+- Added guard for missing custom-field keys in battery payload before assignment to prevent KeyError.
+
+---
+
+## Phase 4: Frontend Reliability and UX Hardening
+
+### 1. Added shared API client
+New file:
+- static/api-client.js
+
+Provides:
+- CSRF header injection
+- request/get/post helpers
+- retry support for transient/server failures
+- robust JSON parsing behavior
+
+### 2. Updated load matches workflows to resilient API usage
+In static/tba.js:
+- Switched key fetch flows to ApiClient helpers.
+- Added retry behavior on critical calls.
+- Updated TBA sync polling to support wrapped Phase 3 response shape (data.job_status).
+- Added event-loading workflow with fetchTeamEvents().
+- Added input mode toggling between manual key and event dropdown.
+
+### 3. Added missing template controls expected by JS
+In templates/load_matches.html:
+- Added eventSelect dropdown
+- Added eventKeyManual input
+- Added manualEntryToggle checkbox
+
+This removes prior DOM assumption gaps and makes load_matches controls explicit.
+
+### 4. Synced sync.js with new API envelope and improved safety
+In static/sync.js:
+- Updated sync status polling to read wrapped status (data.job_status fallback).
+- Added startSyncButton presence guard.
+- Added spinner optional chaining to avoid null errors.
+- Switched sync start and polling to ApiClient.
+
+### 5. Included shared client globally
+In templates/layout.html:
+- Added script include for static/api-client.js before sync.js.
+
+---
+
+## Files Changed
+
+### Added
+- static/api-client.js
+- PHASE_3_4_SUMMARY
+
+### Updated
+- api.py
+- services/tba_service.py
+- services/battery_service.py
+- static/tba.js
+- static/sync.js
+- templates/load_matches.html
+- templates/layout.html
+
+---
+
+## Validation Performed
+
+1. Python compile check:
+- python3 -m py_compile api.py services/battery_service.py services/tba_service.py
+- Result: pass
+
+2. Editor diagnostics:
+- No reported errors in all touched Python, JS, and template files.
+
+---
+
+## Notes
+
+1. Changes preserve existing endpoint behavior while adding compatibility aliases and v1 routes.
+2. Frontend was hardened without introducing framework/tooling migration risk.
+3. Remaining optional Phase 4 work for a later pass:
+- deeper JS file reorganization into static/js/views/* modules for all pages,
+- formal frontend lint pipeline (if Node toolchain is desired for this repo).

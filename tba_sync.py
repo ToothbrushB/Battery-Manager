@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import logging
 from datetime import datetime
 import rq
 import sqlalchemy
@@ -7,9 +8,7 @@ from sqlalchemy.orm import Session
 from models import Base, EventDb, MatchDb, KVStoreDb
 import tba
 from preferences import get_preference
-
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
-Base.metadata.create_all(engine)
+from core import get_engine
 
 
 def download_match_updates():
@@ -22,7 +21,7 @@ def download_match_updates():
     if matches_data is None:
         return {'status': 'error', 'message': 'Failed to fetch matches from TBA (using cached data)'}
 
-    with Session(engine) as session:
+    with Session(get_engine()) as session:
         # Ensure EventDb row exists
         event_db = session.get(EventDb, event_key)
         if event_db is None:
@@ -48,7 +47,7 @@ def download_match_updates():
         session.commit()
 
     if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
-        with sqlalchemy.orm.Session(engine) as db_session:
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             kv_entry = db_session.get(KVStoreDb, "last_tba_sync_job_id")
             if kv_entry is None:
                 kv_entry = KVStoreDb(key="last_tba_sync_job_id", value=rq.get_current_job().id)
@@ -56,10 +55,10 @@ def download_match_updates():
             else:
                 kv_entry.value = rq.get_current_job().id
             db_session.commit()
-        engine.dispose()
+        get_engine().dispose()
     return {'status': 'success', 'message': f'Updated {len(matches_data)} matches for {event_key}'}
 
 
 if __name__ == "__main__":
     result = download_match_updates()
-    print(result)
+    logging.info(result)

@@ -11,8 +11,8 @@ import pythonping
 from preferences import get_preference
 import rq
 from datetime import timedelta
+from core import get_engine
 timeout = httpx.Timeout(30.0, connect=5.0)
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
 
 def format_elapsed(seconds: float | None) -> str | None:
         if seconds is None:
@@ -31,10 +31,16 @@ def format_elapsed(seconds: float | None) -> str | None:
 
 def snipe_it_get(
     endpoint: str,
-    api_key=get_preference("snipe-api-key"),
-    snipe_url=get_preference("snipe-url"),
+    api_key=None,
+    snipe_url=None,
     params=None,
 ):
+    import logging
+    if api_key is None:
+        api_key = get_preference("snipe-api-key")
+    if snipe_url is None:
+        snipe_url = get_preference("snipe-url")
+    
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
@@ -44,8 +50,8 @@ def snipe_it_get(
     response = httpx.get(
         snipe_url + endpoint, headers=headers, params=params, timeout=timeout
     )
-    with open("debug_response.json", "w") as f:
-        f.write(response.text)
+    if os.getenv("DEBUG"):
+        logging.debug(f"Snipe-IT API response for {endpoint}: {response.status_code}")
     return response
 
 
@@ -102,12 +108,16 @@ async def fetch_batch(
 
 async def snipe_it_get_async(
     endpoint,
-    api_key=get_preference("snipe-api-key"),
-    snipe_url=get_preference("snipe-url"),
+    api_key=None,
+    snipe_url=None,
     client=None,
     params=None,
     semaphore: asyncio.Semaphore = None,
 ):
+    if api_key is None:
+        api_key = get_preference("snipe-api-key")
+    if snipe_url is None:
+        snipe_url = get_preference("snipe-url")
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
@@ -127,10 +137,14 @@ async def snipe_it_get_async(
 
 def snipe_it_post(
     endpoint,
-    api_key=get_preference("snipe-api-key"),
-    snipe_url=get_preference("snipe-url"),
+    api_key=None,
+    snipe_url=None,
     data=None,
 ):
+    if api_key is None:
+        api_key = get_preference("snipe-api-key")
+    if snipe_url is None:
+        snipe_url = get_preference("snipe-url")
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
@@ -144,10 +158,14 @@ def snipe_it_post(
 
 def snipe_it_put(
     endpoint,
-    api_key=get_preference("snipe-api-key"),
-    snipe_url=get_preference("snipe-url"),
+    api_key=None,
+    snipe_url=None,
     data=None,
 ):
+    if api_key is None:
+        api_key = get_preference("snipe-api-key")
+    if snipe_url is None:
+        snipe_url = get_preference("snipe-url")
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
@@ -161,12 +179,16 @@ def snipe_it_put(
 
 async def snipe_it_put_async(
     endpoint,
-    api_key=get_preference("snipe-api-key"),
-    snipe_url=get_preference("snipe-url"),
+    api_key=None,
+    snipe_url=None,
     client=None,
     data=None,
     semaphore: asyncio.Semaphore = None,
 ):
+    if api_key is None:
+        api_key = get_preference("snipe-api-key")
+    if snipe_url is None:
+        snipe_url = get_preference("snipe-url")
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
@@ -176,24 +198,28 @@ async def snipe_it_put_async(
     if semaphore is not None:
         async with semaphore:
             req = await client.put(
-                snipe_url + endpoint, headers=headers, data=data, timeout=timeout
+                snipe_url + endpoint, headers=headers, json=data, timeout=timeout
             )
             return req
             
     else:
         return await client.put(
-            snipe_url + endpoint, headers=headers, data=data, timeout=timeout
+            snipe_url + endpoint, headers=headers, json=data, timeout=timeout
         )
 
 
 async def snipe_it_post_async(
     endpoint,
-    api_key=get_preference("snipe-api-key"),
-    snipe_url=get_preference("snipe-url"),
+    api_key=None,
+    snipe_url=None,
     client=None,
     data=None,
     semaphore: asyncio.Semaphore = None,
 ):
+    if api_key is None:
+        api_key = get_preference("snipe-api-key")
+    if snipe_url is None:
+        snipe_url = get_preference("snipe-url")
     headers = {
         "accept": "application/json",
         "Authorization": "Bearer " + api_key,
@@ -231,7 +257,7 @@ def ping():
         output = pythonping.ping(get_preference("snipe-url").split("/")[2].split(":")[0], count=5, timeout=2)
     except RuntimeError:
         output = None
-    with sqlalchemy.orm.Session(engine) as session:
+    with sqlalchemy.orm.Session(get_engine()) as session:
         kv_entry = session.get(KVStoreDb, "ping_rtt_ms")
         if kv_entry is None:
             kv_entry = KVStoreDb(key="ping_rtt_ms", value=str(output.rtt_avg_ms if output and output.success(2) else -1))
@@ -240,5 +266,5 @@ def ping():
             kv_entry.value = str(output.rtt_avg_ms if output and output.success(2) else -1)
         session.commit()
     if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
-        engine.dispose()
+        get_engine().dispose()
     return output.rtt_avg_ms if output and output.success(2) else None

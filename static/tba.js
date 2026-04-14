@@ -86,9 +86,13 @@ document.addEventListener('DOMContentLoaded', function () {
         updateSyncInfo(window.initialLastSyncedAt);
     }
 
-    document.getElementById('loadMatchesBtn').addEventListener('click', () => loadMatchesFromApi());
-    document.getElementById('tbaSyncBtn').addEventListener('click', triggerTbaSync);
-    document.getElementById('confirmAssignBtn').addEventListener('click', confirmBatteryAssignment);
+    document.getElementById('loadMatchesBtn')?.addEventListener('click', () => loadMatchesFromApi());
+    document.getElementById('tbaSyncBtn')?.addEventListener('click', triggerTbaSync);
+    document.getElementById('confirmAssignBtn')?.addEventListener('click', confirmBatteryAssignment);
+    document.getElementById('fetchEventsBtn')?.addEventListener('click', fetchTeamEvents);
+    document.getElementById('manualEntryToggle')?.addEventListener('change', toggleEventInputMode);
+
+    toggleEventInputMode();
 
     // Highlight after initial render
     setTimeout(highlightTeamMatches, 300);
@@ -98,10 +102,14 @@ document.addEventListener('DOMContentLoaded', function () {
 async function loadMatchesFromApi(eventKeyOverride) {
     let eventKey = eventKeyOverride;
     if (!eventKey) {
-        const manual = document.getElementById('manualEntryToggle').checked;
+        const manualToggle = document.getElementById('manualEntryToggle');
+        const eventKeyManualInput = document.getElementById('eventKeyManual');
+        const eventSelectInput = document.getElementById('eventSelect');
+        
+        const manual = manualToggle?.checked || false;
         eventKey = manual
-            ? document.getElementById('eventKeyManual').value.trim()
-            : document.getElementById('eventSelect').value;
+            ? eventKeyManualInput?.value?.trim() || ''
+            : eventSelectInput?.value || '';
     }
     if (!eventKey) {
         showToast('Please select or enter an event key.', 'Event Required', 'error');
@@ -112,8 +120,10 @@ async function loadMatchesFromApi(eventKeyOverride) {
     btn.disabled = true;
     spinner.classList.remove('d-none');
     try {
-        const resp = await fetch(`/api/tba/matches?event_key=${encodeURIComponent(eventKey)}`);
-        const data = await resp.json();
+        const { response: resp, data } = await window.ApiClient.get(
+            `/api/tba/matches?event_key=${encodeURIComponent(eventKey)}`,
+            { retries: 1 }
+        );
         if (!resp.ok) {
             showToast(data.message || 'Failed to fetch matches', 'Error', 'error');
             return;
@@ -138,6 +148,74 @@ function updateSyncInfo(timestamp) {
     const syncInfoText = document.getElementById('syncInfoText');
     const date = new Date(parseFloat(timestamp) * 1000);
     syncInfoText.innerHTML = `Last synced: <span id="lastSyncedAtDisplay">${date.toLocaleString()}</span>`;
+}
+
+function toggleEventInputMode() {
+    const manualToggle = document.getElementById('manualEntryToggle');
+    const eventKeyManualInput = document.getElementById('eventKeyManual');
+    const eventSelectInput = document.getElementById('eventSelect');
+    const manual = !!manualToggle?.checked;
+
+    if (eventKeyManualInput) {
+        eventKeyManualInput.disabled = !manual;
+    }
+    if (eventSelectInput) {
+        eventSelectInput.disabled = manual;
+    }
+}
+
+async function fetchTeamEvents() {
+    const btn = document.getElementById('fetchEventsBtn');
+    const spinner = document.getElementById('fetchEventsSpinner');
+    const eventSelect = document.getElementById('eventSelect');
+    const teamKey = (window.initialTeamKey || '').trim();
+
+    if (!teamKey) {
+        showToast('Team key is not configured in Settings.', 'Missing Team Key', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    spinner?.classList.remove('d-none');
+    try {
+        const year = new Date().getFullYear();
+        const { response, data } = await window.ApiClient.get(
+            `/api/tba/events?team_key=${encodeURIComponent(teamKey)}&year=${year}`,
+            { retries: 1 }
+        );
+
+        if (!response.ok) {
+            showToast(data?.message || 'Failed to fetch events', 'Error', 'error');
+            return;
+        }
+
+        if (!eventSelect) return;
+        eventSelect.innerHTML = '';
+        const events = Array.isArray(data) ? data : [];
+        if (!events.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No events found';
+            eventSelect.appendChild(option);
+            return;
+        }
+
+        events.forEach(evt => {
+            const option = document.createElement('option');
+            option.value = evt.key;
+            option.textContent = `${evt.name || evt.key} (${evt.key})`;
+            if (evt.key === currentEventKey) {
+                option.selected = true;
+            }
+            eventSelect.appendChild(option);
+        });
+        showToast(`Loaded ${events.length} events`, 'Events', 'success');
+    } catch (err) {
+        showToast(`Error fetching events: ${err.message}`, 'Error', 'error');
+    } finally {
+        btn.disabled = false;
+        spinner?.classList.add('d-none');
+    }
 }
 
 // ── Match display helpers ────────────────────────────────────────────────────
@@ -416,8 +494,11 @@ async function openAssignmentModal(match) {
     multiCheckbox.onchange = refreshSelectionState;
 
     try {
-        const resp = await fetch('/api/battery');
-        allAssignableBatteries = await resp.json();
+        const { response: resp, data } = await window.ApiClient.get('/api/battery', { retries: 1 });
+        allAssignableBatteries = Array.isArray(data) ? data : [];
+        if (!resp.ok) {
+            throw new Error(data?.message || `HTTP ${resp.status}`);
+        }
 
         batterySelectList.innerHTML = '';
         const initialIds = currentBatteries.map(b => String(b.id)).filter(Boolean);
@@ -457,17 +538,12 @@ async function confirmBatteryAssignment() {
     const matchKey = currentMatchForAssignment.key;
 
     try {
-        const resp = await fetch('/api/tba/assign_battery', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        const { data } = await window.ApiClient.post('/api/tba/assign_battery', {
                 match_key: matchKey,
                 battery_id: batteryIdRaw ? parseInt(batteryIdRaw, 10) : null,
                 battery_ids: uniqueSelected.map(v => parseInt(v, 10)),
                 multi_assign: multiAssign,
-            })
-        });
-        const data = await resp.json();
+            }, { retries: 1 });
 
         if (data.status === 'error') {
             showToast(data.message, 'Error', 'error');
@@ -492,8 +568,7 @@ async function triggerTbaSync() {
     spinner.classList.remove('d-none');
 
     try {
-        const resp = await fetch('/api/tba/sync', { method: 'POST' });
-        const data = await resp.json();
+        const { data } = await window.ApiClient.post('/api/tba/sync', {}, { retries: 1 });
         const toast = showToast(data.message, 'TBA Sync', 'info', 30000);
         checkTbaSyncStatus(toast);
     } catch (err) {
@@ -505,12 +580,12 @@ async function triggerTbaSync() {
 
 async function checkTbaSyncStatus(toast) {
     try {
-        const resp = await fetch('/api/tba/sync');
-        const data = await resp.json();
-        switch (data.status) {
+        const { data } = await window.ApiClient.get('/api/tba/sync', { retries: 1 });
+        const jobStatus = data?.data?.job_status || data?.status;
+        switch (jobStatus) {
             case 'started':
             case 'queued':
-                toast.querySelector('.toast-body').textContent = `TBA sync in progress... (${data.status})`;
+                toast.querySelector('.toast-body').textContent = `TBA sync in progress... (${jobStatus})`;
                 setTimeout(() => checkTbaSyncStatus(toast), 2000);
                 break;
             case 'finished':

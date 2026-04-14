@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import logging
 from datetime import datetime
 import sqlalchemy
 from sqlalchemy.orm import Session
@@ -7,11 +8,7 @@ import httpx
 from models import *
 from helpers import *
 import msgspec
-
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
-Base.metadata.create_all(engine)
-ensure_battery_checkout_columns(engine)
-ensure_battery_history_columns(engine)
+from core import get_engine
 
 CHECKIN_PENDING_MARKER = "__checkin__"
 
@@ -86,7 +83,7 @@ def download_hardware_changes():
     status_labels = asyncio.run(fetch_all(StatusLabel, '/statuslabels'))
     
     assets_to_upload = []
-    with Session(engine) as session:  
+    with Session(get_engine()) as session:  
         for field in field_data.rows: 
             existing = session.get(CustomFieldDb, field.db_column_name)
             if existing is None: # new field
@@ -114,7 +111,7 @@ def download_hardware_changes():
             
             if not processable and remaining:
                 # Circular dependency or missing parent - process remaining as-is
-                print(f"Warning: {len(remaining)} locations have unresolved dependencies")
+                logging.warning(f"Warning: {len(remaining)} locations have unresolved dependencies")
                 processable = remaining
             
             for location in processable:
@@ -148,7 +145,7 @@ def download_hardware_changes():
                 record_battery_history(session, obj)
             else: # existing battery, update with latest change
                 if (float(existing.local_modified_at) if existing.local_modified_at is not None else 0) > datetime.strptime(asset.updated_at.datetime, "%Y-%m-%d %H:%M:%S").timestamp(): # if there is a local change
-                    print(f"Local change detected for asset {asset.id}, skipping download")
+                    logging.info(f"Local change detected for asset {asset.id}, skipping download")
                     assets_to_upload.append(existing)
                     continue
                 existing = BatteryDb.fromAsset(asset, existing)
@@ -173,7 +170,7 @@ def download_hardware_changes():
             responses = asyncio.run(batch_checkin_assets(pending_checkins))
             for battery_id, response in zip(pending_checkins, responses):
                 if isinstance(response, Exception):
-                    print(f"Check-in failed for battery {battery_id}: {response}")
+                    logging.error(f"Check-in failed for battery {battery_id}: {response}")
                     continue
                 response_text = (response.text or "").lower()
                 already_checked_in = (
@@ -181,14 +178,14 @@ def download_hardware_changes():
                     or "not checked out" in response_text
                 )
                 if (response.status_code >= 300 or response.json().get("status") != "success") and not already_checked_in:
-                    print(
+                    logging.error(
                         f"Check-in failed for battery {battery_id}: {response.status_code} {response.text}"
                     )
                     continue
                 if already_checked_in:
-                    print(f"Check-in already satisfied for battery {battery_id}; clearing pending marker")
+                    logging.info(f"Check-in already satisfied for battery {battery_id}; clearing pending marker")
                 else:
-                    print(f"Check-in successful for battery {battery_id}")
+                    logging.info(f"Check-in successful for battery {battery_id}")
                 db_battery = session.get(BatteryDb, battery_id)
                 if db_battery:
                     db_battery.checked_out_to_asset_id = None
@@ -200,14 +197,14 @@ def download_hardware_changes():
             responses = asyncio.run(batch_checkout_assets(pending_checkouts))
             for (battery_id, _), response in zip(pending_checkouts, responses):
                 if isinstance(response, Exception):
-                    print(f"Checkout failed for battery {battery_id}: {response}")
+                    logging.error(f"Checkout failed for battery {battery_id}: {response}")
                     continue
                 if response.status_code >= 300 or response.json().get("status") != "success":
-                    print(
+                    logging.error(
                         f"Checkout failed for battery {battery_id}: {response.status_code} {response.text}"
                     )
                     continue
-                print(f"Checkout successful for battery {battery_id}")
+                logging.info(f"Checkout successful for battery {battery_id}")
                 db_battery = session.get(BatteryDb, battery_id)
                 if db_battery:
                     db_battery.checkout_pending_asset_id = None
@@ -216,20 +213,20 @@ def download_hardware_changes():
         responses = asyncio.run(batch_update_assets([msgspec.msgpack.decode(battery.remote_data, type=Asset) for battery in assets_to_upload]))
         for battery, response in zip(assets_to_upload, responses):
             if isinstance(response, Exception):
-                print(f"Update failed for battery {battery.id}: {response}")
+                logging.error(f"Update failed for battery {battery.id}: {response}")
                 continue
             if response.status_code >= 300 or response.json().get("status") != "success":
-                print(
+                logging.error(
                     f"Update failed for battery {battery.id}: {response.status_code} {response.text}"
                 )
                 continue
-            print(f"Update successful for battery {battery.id}")
+            logging.info(f"Update successful for battery {battery.id}")
             db_battery = session.get(BatteryDb, battery.id)
             if db_battery:
                 db_battery.local_modified_at = None
-                existing.sync_status = "remote_uploaded"
+                db_battery.sync_status = "remote_uploaded"
     if rq.get_current_job(): # then need to close DBAPI connections to prevent connection leaks in rq workers
-        with sqlalchemy.orm.Session(engine) as db_session:
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
             if kv_entry is None:
                 kv_entry = KVStoreDb(key="last_sync_job_id", value=rq.get_current_job().id)
@@ -237,7 +234,7 @@ def download_hardware_changes():
             else:
                 kv_entry.value = rq.get_current_job().id
             db_session.commit()
-        engine.dispose()
+        get_engine().dispose()
 
 
         

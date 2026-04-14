@@ -1,0 +1,97 @@
+# Phase 2 Summary - Data/Domain Cleanup and Service Layer Extraction
+
+Date: April 8, 2026
+Status: Complete
+
+## Objective
+Implement Phase 2 with practical, low-risk changes:
+- Establish domain and database module boundaries.
+- Add a service layer for core business logic.
+- Move high-impact API logic from route handlers into services.
+- Fix model hygiene issues identified in the roadmap.
+
+## Subagent Usage
+1. Explore (planning pass)
+- Identified safe integration points to avoid risky rewrites.
+- Proposed a phased extraction strategy with immediate value paths.
+
+2. Explore (implementation review guidance)
+- Confirmed service-layer-first migration for key endpoints.
+- Guided minimal-touch API integration.
+
+## Delivered Changes
+
+### 1) Domain/DB Split Scaffolding
+Added new module boundaries while preserving compatibility with current code:
+- domain facade: domain/snipe_types.py
+- db facades: db/models.py, db/migrations.py
+
+These provide stable import paths for future Phase 2/3 moves away from the monolithic models.py.
+
+### 2) Service Layer Added
+Created service modules:
+- services/battery_service.py
+- services/tba_service.py
+- services/sync_service.py
+- services/__init__.py (lazy service accessors)
+
+Key business logic now lives in services instead of route handlers:
+- battery fetch + battery update workflow
+- checkout/check-in transition handling in battery updates
+- TBA single/multi assignment workflow
+
+### 3) High-Impact API Migration
+Refactored API handlers to call services:
+- /api/battery/<battery_id> (GET/PUT) now uses BatteryService
+- /api/tba/assign_battery now uses TbaService
+
+This reduced route complexity and concentrated mutation logic in reusable modules.
+
+### 4) Bootstrap/Schema Wiring Update
+Updated bootstrap_db.py to use new DB facade modules:
+- imports now come from db/models.py and db/migrations.py
+
+### 5) Model Hygiene Fixes
+Applied Phase 2 data-layer cleanup in models.py:
+- removed duplicate Company domain struct declaration
+- fixed LocationDb.__repr__ to reference real fields
+
+## Files Added
+- domain/snipe_types.py
+- db/models.py
+- db/migrations.py
+- services/__init__.py
+- services/battery_service.py
+- services/tba_service.py
+- services/sync_service.py
+- PHASE_2_SUMMARY
+
+## Files Updated
+- api.py
+- bootstrap_db.py
+- models.py
+
+## Validation
+Completed:
+1. Python compile validation:
+- python3 -m py_compile on all new/changed modules passed.
+
+2. Diagnostics validation:
+- No editor errors in all changed files.
+
+3. Integration markers:
+- api.py now imports service accessors.
+- target route handlers are routed through services.
+
+## What This Unlocks Next
+1. Easier unit testing of business logic without HTTP route setup.
+2. Incremental migration of remaining route logic into services.
+3. Future extraction from models.py into true split domain/db modules with low churn.
+
+## Recommended Next Step (Phase 2.1)
+Migrate additional read-heavy handlers into services for consistency:
+- /api/battery (list)
+- /api/tba/matches
+- history/query helpers used in app.py page routes
+
+This would complete service-boundary adoption for the most active workflows.

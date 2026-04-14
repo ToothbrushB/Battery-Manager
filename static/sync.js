@@ -523,11 +523,12 @@ function showBatteryInfoModal(batteryId) {
 }
 
 function periodicCheckSyncStatus(toast) {
-    fetch('/api/sync').then(response => response.json()).then(data => {
-        switch (data.status) {
+    window.ApiClient.get('/api/sync', { retries: 1 }).then(({ data }) => {
+        const syncStatus = data?.data?.job_status || data?.status;
+        switch (syncStatus) {
             case 'started':
             case 'queued':
-                toast.querySelector('.toast-body').innerText = `Sync in progress... Status: ${data.status}`;
+                toast.querySelector('.toast-body').innerText = `Sync in progress... Status: ${syncStatus}`;
                 setTimeout(() => periodicCheckSyncStatus(toast), 1000); // check again in 1 second
                 break;
             case 'finished':
@@ -538,6 +539,8 @@ function periodicCheckSyncStatus(toast) {
                 toast.querySelector('.toast-body').innerText = `Sync failed!`;
                 toast.querySelector('.toast-header').className = 'toast-header bg-danger text-white';
                 break;
+            default:
+                toast.querySelector('.toast-body').innerText = `Sync status: ${syncStatus || 'unknown'}`;
         }
     });
 }
@@ -547,19 +550,15 @@ function periodicCheckSyncStatus(toast) {
 document.addEventListener('DOMContentLoaded', function () {
     const startSyncButton = document.getElementById('startSyncButton');
 
-    startSyncButton.addEventListener('click', function () {
-        startSyncButton.disabled = true;
-        startSyncButton.querySelector('.spinner-border').classList.remove('d-none');
+    if (startSyncButton) {
+        startSyncButton.addEventListener('click', function () {
+            startSyncButton.disabled = true;
+            startSyncButton.querySelector('.spinner-border')?.classList.remove('d-none');
 
-        fetch('/api/sync', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        })
-            .then(response => response.json())
-            .then(data => {
-                toast = showToast(data.message, 'Syncing', 'success', timeout = 30000);
+            window.ApiClient.post('/api/sync', {}, { retries: 1 })
+            .then(({ data }) => {
+                const message = data?.message || 'Sync started';
+                toast = showToast(message, 'Syncing', 'success', timeout = 30000);
                 periodicCheckSyncStatus(toast);
             })
             .catch(error => {
@@ -568,9 +567,10 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .finally(() => {
                 startSyncButton.disabled = false;
-                startSyncButton.querySelector('.spinner-border').classList.add('d-none');
+                startSyncButton.querySelector('.spinner-border')?.classList.add('d-none');
             });
-    });
+        });
+    }
 
     Array.from(document.getElementsByClassName('batteryModalButton')).forEach(button => {
         button.addEventListener('click', function (event) {

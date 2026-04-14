@@ -1,23 +1,24 @@
 import os
 import subprocess
-from datetime import datetime
+import logging
+import uuid
+import sys
+from datetime import datetime, timezone
 import sqlalchemy
 from models import *
 from helpers import format_elapsed
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
-Base.metadata.create_all(engine)
-ensure_battery_checkout_columns(engine)
-ensure_battery_history_columns(engine)
-ensure_tba_match_battery_assignment_table(engine)
+from core import get_engine, get_redis
+from bootstrap_db import ensure_all_schemas
 
 
 import json
-from redis import Redis
 
-from flask import Flask, flash, redirect, render_template, request, session
+from flask import Flask, flash, g, has_request_context, jsonify, redirect, render_template, request, session
+from functools import wraps
 from flask_seasurf import SeaSurf
 import flask_session
 from flask_talisman import Talisman
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from helpers import snipe_it_get, snipe_it_post
@@ -30,44 +31,119 @@ from preferences import (
 )
 
 
-# Configure application
-app = Flask(__name__)
-csrf = SeaSurf(app)
-app.register_blueprint(api)
-app.config['SESSION_TYPE'] = 'redis'
-app.config['SESSION_REDIS'] = Redis(host=os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379))
-flask_session.Session(app)
+config = []
 
-# Talisman setup Source - https://stackoverflow.com/a
-# Posted by user21344659
-# Retrieved 2026-01-07, License - CC BY-SA 4.0
-SELF = "'self'"
-csp = {
-    "default-src": SELF,
-    "img-src": "*",
-    "script-src": [
-        SELF,
-    ],
-    "style-src": [
-        SELF,
-    ],
-    "font-src": [
-        SELF,
-    ],
-}
 
-nonce_list = ["default-src", "script-src"]
+class JsonLogFormatter(logging.Formatter):
+    def format(self, record):
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
 
-talisman = Talisman(
-    app, content_security_policy=csp, content_security_policy_nonce_in=nonce_list
-)
+        for key in ("status_code", "duration_ms"):
+            value = getattr(record, key, None)
+            if value is not None:
+                payload[key] = value
 
-app.secret_key = os.getenv("FLASK_SECRET_KEY")
+        if has_request_context():
+            payload["request_id"] = getattr(g, "request_id", None)
+            payload["path"] = request.path
+            payload["method"] = request.method
 
-config = json.load(open("config.json"))
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
 
-# Initialize settings from config file
-load_settings_from_config()
+        return json.dumps(payload)
+
+
+def configure_logging() -> None:
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonLogFormatter())
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+
+def ensure_admin_seed_user() -> None:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
+        admin_count = db_session.query(UserDb).filter(UserDb.role == "admin").count()
+        if admin_count > 0:
+            return
+
+        first_user = db_session.query(UserDb).order_by(UserDb.username.asc()).first()
+        if first_user is None:
+            return
+
+        first_user.role = "admin"
+        db_session.commit()
+
+
+def create_app() -> Flask:
+    configure_logging()
+    ensure_all_schemas()
+    ensure_admin_seed_user()
+
+    app = Flask(__name__)
+    if "pytest" in sys.modules:
+        app.config["TESTING"] = True
+
+    csrf = SeaSurf(app)
+    app.register_blueprint(api)
+    app.config["SESSION_TYPE"] = "redis"
+    app.config["SESSION_REDIS"] = get_redis()
+    flask_session.Session(app)
+
+    # Talisman setup Source - https://stackoverflow.com/a
+    # Posted by user21344659
+    # Retrieved 2026-01-07, License - CC BY-SA 4.0
+    SELF = "'self'"
+    csp = {
+        "default-src": SELF,
+        "img-src": [SELF, "data:", "https:"],
+        "script-src": [SELF],
+        "style-src": [SELF],
+        "font-src": [SELF],
+        "object-src": "'none'",
+        "base-uri": SELF,
+        "frame-ancestors": "'none'",
+    }
+
+    nonce_list = ["script-src"]
+
+    force_https = True
+    if app.debug or app.testing or "pytest" in sys.modules:
+        force_https = False
+
+    Talisman(
+        app,
+        content_security_policy=csp,
+        content_security_policy_nonce_in=nonce_list,
+        force_https=force_https,
+    )
+
+    secret_key = os.getenv("FLASK_SECRET_KEY")
+    if not secret_key:
+        raise RuntimeError("FLASK_SECRET_KEY must be set before starting the app")
+    app.secret_key = secret_key
+
+    global config
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    # Initialize settings from config file.
+    load_settings_from_config()
+
+    return app
+
+
+app = create_app()
 
 
 def get_git_describe() -> str:
@@ -90,13 +166,48 @@ def inject_build_info():
     return {"git_describe": get_git_describe()}
 
 
+@app.before_request
+def before_request():
+    incoming_request_id = (request.headers.get("X-Request-ID") or "").strip()
+    g.request_id = incoming_request_id if incoming_request_id else uuid.uuid4().hex
+    g.request_started_at = datetime.now(timezone.utc)
+
+
 @app.after_request
 def after_request(response):
     """Ensure responses aren't cached"""
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Expires"] = 0
     response.headers["Pragma"] = "no-cache"
+    response.headers["X-Request-ID"] = getattr(g, "request_id", "")
+
+    started_at = getattr(g, "request_started_at", None)
+    duration_ms = None
+    if started_at is not None:
+        duration_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+
+    logging.getLogger("battery_manager.access").info(
+        "request_complete",
+        extra={"status_code": response.status_code, "duration_ms": duration_ms},
+    )
     return response
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(error: HTTPException):
+    logging.getLogger("battery_manager.http").warning(
+        "http_exception",
+        extra={"status_code": error.code},
+    )
+    return error
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(error: Exception):
+    logging.getLogger("battery_manager.error").exception("unhandled_exception")
+    if request.path.startswith("/api/"):
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+    return "Internal server error", 500
 
 
 @app.route("/")
@@ -104,7 +215,7 @@ def index():
     hidden_ids = get_hidden_asset_ids()
     tracked_team_keys = get_preference("tba-team-key") or ""
 
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         query = db_session.query(BatteryDb)
         if hidden_ids:
             query = query.filter(BatteryDb.id.notin_(hidden_ids))
@@ -192,7 +303,7 @@ def index():
 @app.route("/list_view", methods=["GET"])
 def list_view():
     hidden_ids = get_hidden_asset_ids()
-    with engine.connect() as connection:
+    with get_engine().connect() as connection:
         query = sqlalchemy.select(BatteryDb)
         if hidden_ids:
             query = query.where(BatteryDb.id.notin_(hidden_ids))
@@ -205,9 +316,47 @@ def list_view():
     )
 
 
+def login_required(f):
+    """Decorator to require login for a route."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if session.get("user_id") is None:
+            flash("Must be logged in to view this page", "error")
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def user_is_admin() -> bool:
+    username = session.get("user_id")
+    if not username:
+        return False
+
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
+        user = db_session.get(UserDb, username)
+        if user is None:
+            return False
+        return (user.role or "viewer") == "admin"
+
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if session.get("user_id") is None:
+            flash("Must be logged in to view this page", "error")
+            return redirect("/login")
+        if not user_is_admin():
+            flash("Admin access required", "error")
+            return redirect("/")
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
 @app.route("/history", methods=["GET"])
+@login_required
 def history():
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         display_fields = (
             db_session.query(CustomFieldDb)
             .filter(
@@ -284,8 +433,9 @@ def history():
 
 
 @app.route("/history/clear", methods=["POST"])
+@admin_required
 def clear_history():
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         db_session.query(BatteryHistoryDb).delete()
         db_session.commit()
     flash("History cleared.", "success")
@@ -293,8 +443,9 @@ def clear_history():
 
 
 @app.route("/settings", methods=["GET", "POST"])
+@admin_required
 def settings():
-    with sqlalchemy.orm.Session(engine) as sql_session:
+    with sqlalchemy.orm.Session(get_engine()) as sql_session:
         existing_fields = sql_session.query(CustomFieldDb).all()
         existing_locations = (
             sql_session.query(LocationDb).where(LocationDb.is_parent == True).all()
@@ -359,9 +510,10 @@ def settings():
 
 
 @app.route("/load_matches", methods=["GET"])
+@login_required
 def load_matches():
     from datetime import datetime as dt
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         event_key = get_preference('tba-event-key') or ''
         team_key = get_preference('tba-team-key') or ''
         matches = []
@@ -437,16 +589,20 @@ def register():
         hash = generate_password_hash(password)
 
         try:
-            with sqlalchemy.orm.Session(engine) as db_session:
-                db_session.add(UserDb(username=username, password=hash))
+            with sqlalchemy.orm.Session(get_engine()) as db_session:
+                existing_user_count = db_session.query(UserDb).count()
+                user_role = "admin" if existing_user_count == 0 else "viewer"
+                db_session.add(UserDb(username=username, password=hash, role=user_role))
                 db_session.commit()
                 new_user = username
+                new_user_role = user_role
                 
         except Exception as e:
-            print(e)
+            logging.error(f"Registration error: {e}")
             flash("Username already exists", "error")
             return render_template("register.html")
         session["user_id"] = new_user
+        session["user_role"] = new_user_role
 
         return redirect("/")
 
@@ -470,7 +626,7 @@ def login():
             return render_template("login.html")
 
         # Query database for username
-        with sqlalchemy.orm.Session(engine) as db_session:
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             existing = db_session.get(UserDb, request.form.get("username"))
 
             # Ensure username exists and password is correct
@@ -482,6 +638,10 @@ def login():
 
             # Remember which user has logged in
             session["user_id"] = existing.username
+            if not existing.role:
+                existing.role = "viewer"
+                db_session.commit()
+            session["user_role"] = existing.role
 
         # Redirect user to home page
         return redirect("/")

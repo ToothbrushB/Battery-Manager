@@ -7,8 +7,7 @@ import os
 from typing import Optional
 import sqlalchemy
 from models import PreferenceDb, FieldMappingDb
-
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
+from core import get_engine
 
 
 def get_preference(key: str) -> Optional[str]:
@@ -21,7 +20,7 @@ def get_preference(key: str) -> Optional[str]:
     Returns:
         The preference value as a string, or None if not found
     """
-    with sqlalchemy.orm.Session(engine) as session:
+    with sqlalchemy.orm.Session(get_engine()) as session:
         pref = session.get(PreferenceDb, key)
         return pref.value if pref else None
 
@@ -71,7 +70,7 @@ def set_preference(key: str, value: str) -> None:
         key: The preference key
         value: The value to set
     """
-    with sqlalchemy.orm.Session(engine) as session:
+    with sqlalchemy.orm.Session(get_engine()) as session:
         pref = session.get(PreferenceDb, key)
         if pref:
             pref.value = value
@@ -88,7 +87,11 @@ def load_settings_from_config(config_path: str = "config.json") -> None:
     Args:
         config_path: Path to the configuration JSON file
     """
-    config = json.load(open(config_path))
+    resolved_path = config_path
+    if not os.path.isabs(resolved_path):
+        resolved_path = os.path.join(os.path.dirname(__file__), resolved_path)
+    with open(resolved_path, "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
     
     default_mappings = [
 FieldMappingDb(
@@ -108,7 +111,7 @@ FieldMappingDb(
                 db_column_name="",
             ),
     ]
-    with sqlalchemy.orm.Session(engine) as session:
+    with sqlalchemy.orm.Session(get_engine()) as session:
         # Initialize field mappings if they don't exist
         existing_mappings = session.query(FieldMappingDb).all()
         for default in default_mappings:
@@ -138,7 +141,7 @@ def get_all_preferences() -> dict[str, str]:
     Returns:
         Dictionary mapping preference keys to values
     """
-    with sqlalchemy.orm.Session(engine) as session:
+    with sqlalchemy.orm.Session(get_engine()) as session:
         prefs = session.query(PreferenceDb).all()
         return {pref.key: pref.value for pref in prefs}
 
@@ -150,7 +153,7 @@ def update_preferences_from_dict(preferences: dict[str, str]) -> None:
     Args:
         preferences: Dictionary mapping preference keys to new values
     """
-    with sqlalchemy.orm.Session(engine) as session:
+    with sqlalchemy.orm.Session(get_engine()) as session:
         for key, value in preferences.items():
             pref = session.get(PreferenceDb, key)
             if pref:

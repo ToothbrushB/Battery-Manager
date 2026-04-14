@@ -169,12 +169,6 @@ class Depreciation(msgspec.Struct):
     minimum: Optional[float] = None
 
 
-class Company(msgspec.Struct):
-    id: int
-    name: str
-    tag_color: Optional[str] = None
-
-
 class Assignee(msgspec.Struct):
     id: int
     name: Optional[str] = None
@@ -270,9 +264,10 @@ class UserDb(Base):
     __tablename__ = "user"
     username: Mapped[str] = mapped_column(String(255), primary_key=True)
     password: Mapped[str] = mapped_column(String(255))
+    role: Mapped[Optional[str]] = mapped_column(String(50), default="viewer")
 
     def __repr__(self) -> str:
-        return f"User(username={self.username!r}, password={self.password!r})"
+        return f"User(username={self.username!r}, role={self.role!r})"
     
 class LocationDb(Base):
     __tablename__ = "location"
@@ -285,7 +280,7 @@ class LocationDb(Base):
     last_synced_at: Mapped[Optional[str]] = mapped_column(String(50))
 
     def __repr__(self) -> str:
-        return f"Address(id={self.id!r}, email_address={self.email_address!r})"
+        return f"Location(id={self.id!r}, name={self.name!r})"
 
     @classmethod
     def fromLocation(cls, location: Location, existing: LocationDb = None) -> LocationDb:
@@ -676,6 +671,16 @@ def ensure_battery_history_columns(engine):
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(statement)
+
+
+def ensure_user_role_column(engine):
+    inspector = inspect(engine)
+    existing_columns = {col["name"] for col in inspector.get_columns("user")}
+    if "role" in existing_columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE user ADD COLUMN role TEXT DEFAULT 'viewer'"))
 
 
 def record_battery_history(

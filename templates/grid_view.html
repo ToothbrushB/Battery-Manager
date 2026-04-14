@@ -434,7 +434,7 @@ async function refreshGridView() {
     try {
         const [locationsResp, batteriesResp] = await Promise.all([
             fetch('/api/locations?onlyAllowed=true'),
-            fetch('/api/batteries'),
+            fetch('/api/battery'),
         ]);
         if (!locationsResp.ok) {
             throw new Error(`Locations HTTP ${locationsResp.status}`);

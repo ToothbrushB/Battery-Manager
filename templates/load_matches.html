@@ -17,7 +17,33 @@
     <div class="card mb-4">
         <div class="card-header fw-bold">Event Selection</div>
         <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-5">
+                    <label for="eventSelect" class="form-label">Event (from team schedule)</label>
+                    <select class="form-select" id="eventSelect">
+                        {% if event_key %}
+                        <option value="{{ event_key }}" selected>{{ event_key }}</option>
+                        {% else %}
+                        <option value="" selected>Select an event</option>
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label for="eventKeyManual" class="form-label">Manual Event Key</label>
+                    <input
+                        type="text"
+                        class="form-control"
+                        id="eventKeyManual"
+                        value="{{ event_key or '' }}"
+                        placeholder="e.g. 2026miket"
+                        disabled
+                    >
+                </div>
                 <div class="col-md-3">
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="manualEntryToggle">
+                        <label class="form-check-label" for="manualEntryToggle">Manual key</label>
+                    </div>
                     <div class="d-grid gap-2">
                         <button class="btn btn-outline-secondary" id="fetchEventsBtn">
                             <span class="d-none spinner-border spinner-border-sm me-1" id="fetchEventsSpinner"></span>

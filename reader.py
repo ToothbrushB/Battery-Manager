@@ -16,14 +16,14 @@ class TCA9548A:
         return self.bus.read_byte(self.address)
     
 
-    
 if __name__ == "__main__":
+    import logging
     bus = smbus3.SMBus(1)  # Use I2C bus 1
     root = TCA9548A(bus)
 
     for channel in range(8):
         try:
             data = multiplexer.read_channel(channel)
-            print(f"Channel {channel}: {data}")
+            logging.info(f"Channel {channel}: {data}")
         except Exception as e:
-            print(f"Error reading channel {channel}: {e}")
+            logging.error(f"Error reading channel {channel}: {e}")

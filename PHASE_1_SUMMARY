@@ -1,0 +1,157 @@
+# Phase 1 Summary - App Initialization and Startup Refactor
+
+Date: April 8, 2026
+Status: Complete
+
+## Objective
+Implement Phase 1 from the plan:
+- Add a startup structure with explicit bootstrapping.
+- Reduce import-time side effects in runtime modules.
+- Split web and worker startup responsibilities.
+- Preserve existing app and API behavior.
+
+## Subagents Used
+1. Explore (side-effect map)
+- Identified import-time side effects in app.py, api.py, sync.py, tba_sync.py, helpers.py, and preferences.py.
+- Produced a target architecture for bootstrap and entrypoints.
+
+2. Explore (reviewer pass)
+- Performed a post-change review and returned concrete regression findings.
+- Findings were applied immediately (helpers defaults, PUT payload encoding, explicit imports, method branch cleanup, path-safe config loading).
+
+## Implementation Details
+
+### New Modules Added
+1. core.py
+- Added lazy shared service getters:
+  - get_engine()
+  - get_redis()
+  - get_queue()
+- Centralized connection creation to avoid repeated engine/queue construction in multiple modules.
+
+2. bootstrap_db.py
+- Added ensure_all_schemas().
+- Consolidates:
+  - Base.metadata.create_all(...)
+  - ensure_battery_checkout_columns(...)
+  - ensure_battery_history_columns(...)
+  - ensure_tba_match_battery_assignment_table(...)
+
+3. bootstrap_scheduler.py
+- Added ensure_periodic_job(...).
+- Added ensure_periodic_jobs() for controlled periodic job registration.
+- Moved periodic scheduling responsibility out of api import-time.
+
+4. wsgi.py
+- Added explicit web entrypoint using app from app.py.
+
+5. worker.py
+- Added explicit worker entrypoint:
+  - ensure_all_schemas()
+  - ensure_periodic_jobs()
+  - Worker(...).work(with_scheduler=True)
+
+### Refactors to Existing Modules
+1. api.py
+- Removed import-time schema creation.
+- Removed import-time periodic job creation.
+- Replaced direct engine usage with get_engine().
+- Replaced direct queue/redis creation with get_queue()/get_redis().
+- Kept trigger_sync behavior by calling ensure_periodic_job(...) on demand.
+- Reviewer fixes applied:
+  - Added explicit imports: datetime and msgspec.
+  - Removed dead POST branch in get_battery_info() method check.
+
+2. app.py
+- Added create_app() factory-style initializer.
+- Moved app configuration into create_app():
+  - SeaSurf
+  - blueprint registration
+  - redis-backed session config
+  - Talisman
+  - secret key
+  - config loading
+  - load_settings_from_config()
+- Added call to ensure_all_schemas() in startup path.
+- Replaced direct engine/session use with get_engine() calls.
+- Fixed auth decorator session key mismatch:
+  - login_required now checks session["user_id"], matching login flow.
+
+3. sync.py
+- Removed import-time engine/schema setup.
+- Replaced module engine usage with get_engine().
+
+4. tba_sync.py
+- Removed import-time engine/schema setup.
+- Replaced module engine usage with get_engine().
+
+5. preferences.py
+- Removed module-level engine creation.
+- Replaced engine usage with get_engine().
+- Made load_settings_from_config() resolve relative config path safely.
+
+6. helpers.py
+- Removed module-level engine creation.
+- Updated ping() to use get_engine().
+- Reviewer fixes applied:
+  - Converted remaining Snipe-IT helper default args from eager get_preference(...) to lazy runtime resolution.
+  - Fixed snipe_it_put_async() to send json=... instead of data=... for PUT payloads.
+
+## Validation
+
+### Completed
+1. Syntax compile verification (all touched modules)
+- Ran:
+  - python3 -m py_compile app.py api.py sync.py tba_sync.py preferences.py helpers.py core.py bootstrap_db.py bootstrap_scheduler.py wsgi.py worker.py
+- Result: pass (no syntax errors)
+
+2. Static diagnostics
+- get_errors run across all modified files.
+- Result: no errors reported.
+
+3. Reviewer subagent follow-up
+- All critical/high findings from reviewer pass were addressed in-code.
+
+### Not Completed in This Environment
+1. Full runtime smoke (web + worker startup execution)
+- Attempted module import smoke hit missing local dependency in terminal environment:
+  - ModuleNotFoundError: sqlalchemy
+- This indicates the active terminal Python does not have project dependencies installed.
+
+## Files Added
+- core.py
+- bootstrap_db.py
+- bootstrap_scheduler.py
+- wsgi.py
+- worker.py
+
+## Files Modified
+- app.py
+- api.py
+- sync.py
+- tba_sync.py
+- preferences.py
+- helpers.py
+
+## Notes and Remaining Risk
+1. app.py still exposes a module-level app = create_app() for compatibility with existing imports and tests.
+- This preserves behavior while introducing a factory function and explicit entrypoints.
+- A deeper Phase 2/Phase 3 refactor can fully move route registration to blueprints/modules to make app construction fully side-effect free.
+
+2. Runtime/startup behavior should be validated after dependencies are installed in the active interpreter:
+- Web: python3 wsgi.py
+- Worker: python3 worker.py
+
+## Suggested Immediate Verification Commands
+1. Install deps in active Python env
+- pip install -r requirements.txt
+
+2. Web startup
+- python3 wsgi.py
+
+3. Worker startup
+- python3 worker.py
+
+4. Endpoint smoke checks
+- GET /, /api/status, /api/battery
+- Auth redirects: /settings, /history without session

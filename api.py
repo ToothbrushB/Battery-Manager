@@ -1,10 +1,10 @@
 import os
 import re
-from flask import Blueprint, Response, jsonify, request
+from datetime import datetime
+from flask import Blueprint, Response, jsonify, request, session
 import sqlalchemy
+import msgspec
 from models import *
-from redis import Redis
-from rq import Queue, Repeat
 from rq import job
 
 import rq
@@ -12,94 +12,69 @@ import sync
 import tba_sync
 import tba as tba_client
 import netifaces as ni 
-from helpers import ping, format_elapsed
+from helpers import format_elapsed
 from preferences import get_preference, get_allowed_checkout_assets, get_hidden_asset_ids
+from core import get_engine, get_redis, get_queue
+from bootstrap_scheduler import ensure_periodic_job
+from services import get_battery_service, get_tba_service
+from functools import wraps
 
-redisq = Queue(connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
 api = Blueprint("api", __name__, url_prefix="/api")
 
-engine = sqlalchemy.create_engine(os.getenv("DATABASE_URL"))
-Base.metadata.create_all(engine)
-ensure_battery_checkout_columns(engine)
-ensure_battery_history_columns(engine)
-ensure_tba_match_battery_assignment_table(engine)
 
-def ensure_periodic_job(job_id: str, func, interval_seconds: int):
-    """Ensure a single periodic job exists for RQ worker --with-scheduler."""
-
-    try:
-        existing_job = job.Job.fetch(job_id, connection=redisq.connection)
-        if existing_job:
-            status = existing_job.get_status(refresh=False)
-            if status not in {"finished", "failed", "stopped", "canceled"}:
-                return existing_job
-            existing_job.delete()
-            redisq.connection.delete(f"rq:job:{job_id}")
-    except rq.exceptions.NoSuchJobError:
-        existing_job = None
-
-    return redisq.enqueue(
-        func,
-        job_id=job_id,
-        # RQ Repeat requires an integer for `times`; use a very large value
-        # to provide effectively continuous scheduling.
-        repeat=Repeat(times=2_147_483_647, interval=interval_seconds),
-    )
+def api_success(message: str | None = None, data=None, status_code: int = 200):
+    payload = {"status": "success"}
+    if message is not None:
+        payload["message"] = message
+    if data is not None:
+        payload["data"] = data
+    return jsonify(payload), status_code
 
 
-ensure_periodic_job("periodic_ping", ping, 5)
-sync_job = ensure_periodic_job("periodic_hardware_sync", sync.download_hardware_changes, 60)
-tba_sync_job = ensure_periodic_job("periodic_tba_sync", tba_sync.download_match_updates, 60)
-with sqlalchemy.orm.Session(engine) as db_session:
-    kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
-    if kv_entry is None:
-        kv_entry = KVStoreDb(key="last_sync_job_id", value=sync_job.id)
-        db_session.add(kv_entry)
-    else:
-        kv_entry.value = sync_job.id
-    kv = db_session.get(KVStoreDb, "last_tba_sync_job_id")
-    if kv is None:
-        db_session.add(KVStoreDb(key="last_tba_sync_job_id", value=tba_sync_job.id))
-    else:
-        kv.value = tba_sync_job.id
-    db_session.commit()
-
-CHECKIN_PENDING_MARKER = "__checkin__"
+def api_error(message: str, status_code: int = 400, details=None):
+    payload = {"status": "error", "message": message}
+    if details is not None:
+        payload["details"] = details
+    return jsonify(payload), status_code
 
 
-def increment_cycle_count_for_checkout(db_session: sqlalchemy.orm.Session, asset: Asset) -> None:
-    """Increment mapped cycle-count custom field on checkout if configured."""
+def api_login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if session.get("user_id") is None:
+            return api_error("Authentication required", 401)
+        return f(*args, **kwargs)
 
-    mapping = (
-        db_session.query(FieldMappingDb)
-        .filter(FieldMappingDb.name == "Battery Cycle Count")
-        .first()
-    )
-    if mapping is None or not mapping.db_column_name:
-        return
+    return wrapper
 
-    custom_field = db_session.get(CustomFieldDb, mapping.db_column_name)
-    if custom_field is None or not asset.custom_fields:
-        return
 
-    field_asset = asset.custom_fields.get(custom_field.name)
-    if field_asset is None:
-        return
+def api_admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        username = session.get("user_id")
+        if username is None:
+            return api_error("Authentication required", 401)
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
+            user = db_session.get(UserDb, username)
+            if user is None or (user.role or "viewer") != "admin":
+                return api_error("Admin access required", 403)
+        return f(*args, **kwargs)
 
-    raw_value = field_asset.value
-    try:
-        current_count = int(float(str(raw_value).strip())) if raw_value not in (None, "") else 0
-    except (TypeError, ValueError):
-        current_count = 0
+    return wrapper
 
-    field_asset.value = str(current_count + 1)
-
+@api.route("/v1/sync", methods=["POST", "GET"])
 @api.route("/sync", methods=["POST", "GET"])
 def trigger_sync():
     """Trigger a sync operation"""
     if request.method == "POST":
+        if session.get("user_id") is None:
+            return api_error("Authentication required", 401)
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
+            user = db_session.get(UserDb, session.get("user_id"))
+            if user is None or (user.role or "viewer") != "admin":
+                return api_error("Admin access required", 403)
         sync_job = ensure_periodic_job("periodic_hardware_sync", sync.download_hardware_changes, 60)
-        with sqlalchemy.orm.Session(engine) as db_session:
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
             if kv_entry is None:
                 kv_entry = KVStoreDb(key="last_sync_job_id", value=sync_job.id)
@@ -107,25 +82,26 @@ def trigger_sync():
             else:
                 kv_entry.value = sync_job.id
             db_session.commit()
-        return jsonify({"status": "Queued", "message": "Sync initiated"}), 202 # 202 for accepted/in processing
+        return api_success("Sync initiated", data={"job_status": "queued"}, status_code=202)
     else: 
-        with sqlalchemy.orm.Session(engine) as db_session:
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
             if kv_entry is not None:
                 try:
-                    sync_job = job.Job.fetch(kv_entry.value, connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
+                    sync_job = job.Job.fetch(kv_entry.value, connection=get_redis())
                 except rq.exceptions.NoSuchJobError:
                     sync_job = None
             else:
                 sync_job = None
             if sync_job is None:
-                return jsonify({"status": "No sync job initiated"}), 500
+                return api_error("No sync job initiated", 500)
             status = sync_job.get_status()
-            return jsonify({"status": status}), 200
+            return api_success(data={"job_status": status})
 
+@api.route("/v1/location", methods=["GET"])
 @api.route("/location", methods=["GET"])
 def location_info():
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         locations = db_session.query(LocationDb).all()
         location_list = []
         for loc in locations:
@@ -136,155 +112,104 @@ def location_info():
             msgspec.json.encode(location_list), 200, mimetype="application/json"
         )
 
+@api.route("/v1/location/<int:location_id>", methods=["GET"])
 @api.route("/location/<int:location_id>", methods=["GET"])
 def get_location_info(location_id):
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         loc = db_session.get(LocationDb, location_id)
         if not loc:
-            return jsonify({"message": "Location not found", "status": "error"}), 404
+            return api_error("Location not found", 404)
         decoded = msgspec.msgpack.decode(loc.remote_data, type=Location)
         decoded.allowed = loc.allowed
         return Response(
             msgspec.json.encode(decoded), 200, mimetype="application/json"
         )
 
+@api.route("/v1/qr_scan", methods=["POST"])
 @api.route("/qr_scan", methods=["POST"])
 def qr_scan():
     """Handle QR code scan"""
     qr_data = str((request.json or {}).get("qr_data") or "").strip()
     if not qr_data:
-        return jsonify({"message": "Invalid QR code data", "status": "error"}), 400
+        return api_error("Invalid QR code data", 400)
 
     if "/hardware/" in qr_data:  # this is a url in the form of /hardware/{id}
         match = re.search(r"/hardware/(\d+)", qr_data)
         if not match:
-            return jsonify({"message": "Invalid hardware QR code data", "status": "error"}), 400
+            return api_error("Invalid hardware QR code data", 400)
         id = int(match.group(1))
         return get_battery_info(id)
     elif "/location/" in qr_data:  # this is a url in the form of /location/{id}
         id = qr_data.split("/location/")[1]
-        return jsonify({"message": "Location QR codes not yet supported", "status": "error"}), 400
+        return api_error("Location QR codes not yet supported", 400)
     elif re.fullmatch(r"\d+", qr_data):  # this is just an id
         id = int(qr_data)
         return get_battery_info(id)
     else:
-        return jsonify({"message": "Invalid QR code data", "status": "error"}), 400
+        return api_error("Invalid QR code data", 400)
 
+@api.route("/v1/register_tag", methods=["POST"])
 @api.route("/register_tag", methods=["POST"])
+@api_admin_required
 def register_tag():
     """Register a new NFC tag to a battery"""
-    data = request.json
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("JSON body is required", 400)
     battery_id = data.get("battery_id")
     tag_id = data.get("tag_id")
     if not battery_id or not tag_id:
-        return jsonify({"message": "Battery ID and Tag ID are required", "status": "error"}), 400
-    with sqlalchemy.orm.Session(engine) as db_session:
+        return api_error("Battery ID and Tag ID are required", 400)
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         battery = db_session.get(BatteryDb, battery_id)
         if not battery:
-            return jsonify({"message": "Battery not found", "status": "error"}), 404
+            return api_error("Battery not found", 404)
         battery.nfc_tag = tag_id
         db_session.commit()
-    return jsonify({"message": "Tag registered successfully", "status": "success"}), 200
+    return api_success("Tag registered successfully")
 
+@api.route("/v1/reader/<int:reader_id>", methods=["GET", "POST"])
 @api.route("/reader/<int:reader_id>", methods=["GET", "POST"])
 def reader_info(reader_id):
     """Retrieve reader information by ID"""
     if request.method == "GET":
         pass  # interact with the NFC reader
 
+@api.route("/v1/battery/<int:battery_id>", methods=["GET", "PUT"])
+@api.route("/v1/batteries/<int:battery_id>", methods=["GET", "PUT"])
 @api.route("/battery/<int:battery_id>", methods=["GET", "PUT"])
+@api.route("/batteries/<int:battery_id>", methods=["GET", "PUT"])
 def get_battery_info(battery_id):
     """Retrieve battery information by ID"""
-    if request.method == "GET" or request.method == "POST":
-        with sqlalchemy.orm.Session(engine) as db_session:
-            result = db_session.get(BatteryDb, battery_id)
-            
-            if result:
-                result = BatteryView.from_battery_db(result)
-                for name, custom_field in result.custom_fields.items():
-                    result.custom_fields[name].custom_field = db_session.get(CustomFieldDb, custom_field.field).toCustomField()
-                return Response(
-                    msgspec.json.encode(result),
-                    200,
-                    mimetype="application/json",
-                )
-            else:
-                return jsonify({"message": "Battery not found", "status": "error"}), 404
+    if request.method == "GET":
+        result = get_battery_service().get_battery(battery_id)
+        if result is None:
+            return api_error("Battery not found", 404)
+        return Response(
+            msgspec.json.encode(result),
+            200,
+            mimetype="application/json",
+        )
     elif request.method == "PUT":
-        data = request.json
-        with sqlalchemy.orm.Session(engine) as db_session:
-            result = db_session.get(BatteryDb, battery_id)
-            if not result:
-                return jsonify({"message": "Battery not found", "status": "error"}), 404
-            # Update fields
-            unpacked = msgspec.msgpack.decode(result.remote_data, type=Asset)
-            if "batteryLocation" in data and data["batteryLocation"]:
-                try:
-                    result.location = int(data["batteryLocation"])
-                    unpacked.location = msgspec.msgpack.decode(db_session.get(LocationDb, int(data["batteryLocation"])).remote_data, type=Location)
-                except ValueError:
-                    return jsonify({"message": "Invalid location ID", "status": "error"}), 400
-            if data["batteryStatusSelect"] is not None and data["batteryStatusSelect"] != "":
-                try:
-                    result.statusLabel = int(data["batteryStatusSelect"])
-                    status_label_db = db_session.get(StatusLabelDb, int(data["batteryStatusSelect"]))
-                    if status_label_db is None:
-                        return jsonify({"message": "Status label not found", "status": "error"}), 400
-                    unpacked.status_label = status_label_db.toStatusLabelAsset()
-                except ValueError:
-                    return jsonify({"message": "Invalid status label ID", "status": "error"}), 400
-            if data["batteryNotes"] is not None:
-                result.notes = data["batteryNotes"]
-                unpacked.notes = data["batteryNotes"]
-            for db_name, value in data.items(): # update custom fields
-                if db_name.startswith("_snipeit_"):
-                    field = db_session.get(CustomFieldDb, db_name)
-                    if field is not None:
-                        unpacked.custom_fields[field.name].value = value
-                    else:
-                        return jsonify({"message": f"Custom field {db_name} not found", "status": "error"}), 400
-            checkout_target = data.get("batteryCheckoutTarget")
-            if checkout_target == "":
-                checkout_target = None
-            if (
-                checkout_target
-                and result.checked_out_to_asset_id
-                and checkout_target != result.checked_out_to_asset_id
-            ):
-                return jsonify({
-                    "message": "Battery is already checked out to another asset. Check it in first before assigning a different asset.",
-                    "status": "error",
-                }), 409
-            if checkout_target and checkout_target != result.checked_out_to_asset_id:
-                increment_cycle_count_for_checkout(db_session, unpacked)
-                result.checked_out_to_asset_id = checkout_target
-                result.checkout_pending_asset_id = checkout_target
-                try:
-                    assigned_id = int(checkout_target)
-                except (TypeError, ValueError):
-                    assigned_id = None
-                if assigned_id is not None:
-                    unpacked.assigned_to = Assignee(
-                        id=assigned_id, name=None, type="asset"
-                    )
-            elif not checkout_target:
-                was_checked_out = bool(result.checked_out_to_asset_id)
-                result.checked_out_to_asset_id = None
-                result.checkout_pending_asset_id = CHECKIN_PENDING_MARKER if was_checked_out else None
-                unpacked.assigned_to = None
-            
-            result.remote_data = msgspec.msgpack.encode(unpacked)
-            result.sync_status = "local_updated"
-            result.local_modified_at = datetime.now().timestamp()
-            record_battery_history(db_session, result)
-            db_session.commit()
-        return jsonify({"message": "Battery updated successfully", "status": "success"}), 200
+        username = session.get("user_id")
+        if username is None:
+            return api_error("Authentication required", 401)
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
+            user = db_session.get(UserDb, username)
+            if user is None or (user.role or "viewer") != "admin":
+                return api_error("Admin access required", 403)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return api_error("JSON body is required", 400)
+        response, status_code = get_battery_service().update_battery(battery_id, data)
+        return jsonify(response), status_code
 
 
+@api.route("/v1/custom_fields", methods=["GET"])
 @api.route("/custom_fields", methods=["GET"])
 def get_custom_fields():
     """Retrieve all custom fields"""
-    with engine.connect() as connection:
+    with get_engine().connect() as connection:
         query = sqlalchemy.select(CustomFieldDb)
         result = connection.execute(query).fetchall()
         custom_fields = []
@@ -299,13 +224,14 @@ def get_custom_fields():
         )
 
 
+@api.route("/v1/locations", methods=["GET"])
 @api.route("/locations", methods=["GET"])
 def get_locations():
     """Retrieve all locations"""
     only_allowed_param = (request.args.get("onlyAllowed") or "").strip().lower()
     only_allowed = only_allowed_param in {"1", "true", "yes", "on"}
 
-    with engine.connect() as connection:
+    with get_engine().connect() as connection:
         query = sqlalchemy.select(LocationDb)
         if only_allowed:
             allowed_parent_ids = (
@@ -329,9 +255,10 @@ def get_locations():
             msgspec.json.encode(locations), 200, mimetype="application/json"
         )
         
+@api.route("/v1/status_labels", methods=["GET"])
 @api.route("/status_labels", methods=["GET"])
 def get_status_labels():
-    with engine.connect() as connection:
+    with get_engine().connect() as connection:
         query = sqlalchemy.select(StatusLabelDb)
         result = connection.execute(query).fetchall()
         status_labels = []
@@ -344,9 +271,10 @@ def get_status_labels():
         )
         
         
+@api.route("/v1/field_mappings", methods=["GET"])
 @api.route("/field_mappings", methods=["GET"])
 def get_field_mappings():
-    with engine.connect() as connection:
+    with get_engine().connect() as connection:
         query = sqlalchemy.select(FieldMappingDb)
         result = connection.execute(query).fetchall()
         
@@ -376,14 +304,15 @@ def get_ip_addresses(): #code snippet from ai overview
             ip_info[interface] = ip_address
     return ip_info
 
+@api.route("/v1/status", methods=["GET"])
 @api.route("/status", methods=["GET"])
 def get_status():
     
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         kv_entry = db_session.get(KVStoreDb, "last_sync_job_id")
         if kv_entry is not None:
             try:
-                sync_job = job.Job.fetch(kv_entry.value, connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
+                sync_job = job.Job.fetch(kv_entry.value, connection=get_redis())
             except rq.exceptions.NoSuchJobError:
                 sync_job = None
         else:
@@ -421,9 +350,68 @@ def get_status():
     )
 
 
+@api.route("/v1/health/web", methods=["GET"])
+@api.route("/health/web", methods=["GET"])
+def health_web():
+    checks = {
+        "database": {"ok": False},
+        "redis": {"ok": False},
+    }
+
+    try:
+        with get_engine().connect() as connection:
+            connection.execute(sqlalchemy.text("SELECT 1"))
+        checks["database"]["ok"] = True
+    except Exception as exc:
+        checks["database"]["error"] = str(exc)
+
+    try:
+        get_redis().ping()
+        checks["redis"]["ok"] = True
+    except Exception as exc:
+        checks["redis"]["error"] = str(exc)
+
+    healthy = all(item["ok"] for item in checks.values())
+    status_code = 200 if healthy else 503
+    state = "healthy" if healthy else "unhealthy"
+    return api_success(data={"component": "web", "state": state, "checks": checks}, status_code=status_code)
 
 
+@api.route("/v1/health/worker", methods=["GET"])
+@api.route("/health/worker", methods=["GET"])
+def health_worker():
+    checks = {
+        "redis": {"ok": False},
+        "worker": {"ok": False},
+    }
+
+    workers = []
+    try:
+        redis_conn = get_redis()
+        redis_conn.ping()
+        checks["redis"]["ok"] = True
+        workers = rq.Worker.all(connection=redis_conn)
+        checks["worker"]["ok"] = len(workers) > 0
+        checks["worker"]["worker_count"] = len(workers)
+    except Exception as exc:
+        checks["redis"]["error"] = str(exc)
+
+    if checks["worker"]["ok"]:
+        worker_names = [worker.name for worker in workers]
+        checks["worker"]["workers"] = worker_names
+
+    healthy = checks["redis"]["ok"] and checks["worker"]["ok"]
+    status_code = 200 if healthy else 503
+    state = "healthy" if healthy else "unhealthy"
+    return api_success(data={"component": "worker", "state": state, "checks": checks}, status_code=status_code)
+
+
+
+
+@api.route("/v1/battery", methods=["GET"])
+@api.route("/v1/batteries", methods=["GET"])
 @api.route("/battery", methods=["GET"])
+@api.route("/batteries", methods=["GET"])
 def get_batteries():
     """Retrieve batteries filtered by allowed statuses and locations."""
     def parse_ts(value: str | None) -> float | None:
@@ -440,7 +428,7 @@ def get_batteries():
         for item in get_allowed_checkout_assets()
         if item.get("id")
     }
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         allowed_status_ids = {s.id for s in db_session.query(StatusLabelDb).filter_by(allowed=True).all()}
         allowed_parent_ids = {l.id for l in db_session.query(LocationDb).filter_by(allowed=True).all()}
         allowed_child_ids = {
@@ -514,27 +502,34 @@ def get_batteries():
         return jsonify(result)
 
 
+@api.route("/v1/checkout_targets", methods=["GET"])
 @api.route("/checkout_targets", methods=["GET"])
 def get_checkout_targets():
     return jsonify(get_allowed_checkout_assets())
 
 
+@api.route("/v1/tba/events", methods=["GET"])
 @api.route("/tba/events", methods=["GET"])
 def get_tba_events():
     """Fetch team events from TBA API."""
     team_key = request.args.get('team_key')
-    year = request.args.get('year', datetime.now().year)
+    year_raw = request.args.get('year', datetime.now().year)
     if not team_key:
-        return jsonify({"message": "team_key is required", "status": "error"}), 400
+        return api_error("team_key is required", 400)
+    try:
+        year = int(year_raw)
+    except (TypeError, ValueError):
+        return api_error("year must be an integer", 400)
 
-    events = tba_client.get_team_events(team_key, int(year))
+    events = tba_client.get_team_events(team_key, year)
     if events is None:
-        return jsonify({"message": "Failed to fetch events from TBA. Check your API key and team key.", "status": "error"}), 503
+        return api_error("Failed to fetch events from TBA. Check your API key and team key.", 503)
 
     events.sort(key=lambda e: e.get('start_date', ''))
     return jsonify(events)
 
 
+@api.route("/v1/tba/matches", methods=["GET"])
 @api.route("/tba/matches", methods=["GET"])
 def get_tba_matches():
     """Retrieve matches for an event from the local cache."""
@@ -542,7 +537,7 @@ def get_tba_matches():
     if not event_key or event_key == 'your-event-key-here':
         return jsonify({'matches': [], 'last_synced_at': None, 'event_key': None})
 
-    with sqlalchemy.orm.Session(engine) as db_session:
+    with sqlalchemy.orm.Session(get_engine()) as db_session:
         matches = []
         for m in db_session.query(MatchDb).filter_by(event_key=event_key).all():
             d = m.to_dict()
@@ -577,113 +572,49 @@ def get_tba_matches():
     return jsonify({'matches': matches, 'last_synced_at': last_synced_at, 'event_key': event_key})
 
 
+@api.route("/v1/tba/assign_battery", methods=["POST"])
 @api.route("/tba/assign_battery", methods=["POST"])
+@api_admin_required
 def assign_battery_to_match():
-    """Assign a battery to a match and update the battery match for Snipe-IT sync."""
-    data = request.json or {}
-    match_key = data.get('match_key')
-    battery_id = data.get('battery_id')
-    multi_assign = bool(data.get('multi_assign'))
-    battery_ids_payload = data.get('battery_ids') if isinstance(data.get('battery_ids'), list) else []
-
-    if not match_key:
-        return jsonify({"message": "match_key is required", "status": "error"}), 400
-
-    with sqlalchemy.orm.Session(engine) as db_session:
-        match = db_session.get(MatchDb, match_key)
-        if not match:
-            return jsonify({"message": "Match not found", "status": "error"}), 404
-        if multi_assign:
-            selected_ids: list[int] = []
-            seen: set[int] = set()
-            for raw in battery_ids_payload:
-                if raw in (None, ""):
-                    continue
-                try:
-                    battery_int = int(raw)
-                except (TypeError, ValueError):
-                    return jsonify({"message": "Invalid battery id", "status": "error"}), 400
-                if battery_int in seen:
-                    return jsonify({"message": "Duplicate battery selected", "status": "error"}), 400
-                seen.add(battery_int)
-                selected_ids.append(battery_int)
-
-            db_session.query(MatchBatteryAssignmentDb).filter_by(match_key=match.key).delete()
-            match.assigned_battery_id = selected_ids[0] if selected_ids else None
-
-            match_field_mapping = db_session.query(FieldMappingDb).filter_by(name="Match Key").first()
-            if not match_field_mapping:
-                return jsonify({"message": "Match field mapping not found", "status": "error"}), 400
-                    
-            match_field_mapping_name = db_session.query(CustomFieldDb).filter_by(db_column_name=match_field_mapping.db_column_name).first().name if match_field_mapping and match_field_mapping.db_column_name else None
-            for idx, selected_id in enumerate(selected_ids):
-                battery = db_session.get(BatteryDb, selected_id)
-                if not battery:
-                    return jsonify({"message": f"Battery {selected_id} not found", "status": "error"}), 404
-                db_session.add(
-                    MatchBatteryAssignmentDb(
-                        match_key=match.key,
-                        battery_id=selected_id,
-                        sort_order=idx,
-                        created_at=str(datetime.now().timestamp()),
-                    )
-                )
-
-                if battery.remote_data:
-                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)   
-                    asset.custom_fields[match_field_mapping_name].value = match_key
-                    battery.remote_data = msgspec.msgpack.encode(asset)
-
-                battery.sync_status = "local_updated"
-                battery.local_modified_at = str(datetime.now().timestamp())
-                record_battery_history(db_session, battery)
-        else:
-            db_session.query(MatchBatteryAssignmentDb).filter_by(match_key=match.key).delete()
-            match.assigned_battery_id = int(battery_id) if battery_id else None
-
-            if battery_id:
-                battery = db_session.get(BatteryDb, int(battery_id))
-                if not battery:
-                    return jsonify({"message": "Battery not found", "status": "error"}), 404
-
-                if battery.remote_data:
-                    asset = msgspec.msgpack.decode(battery.remote_data, type=Asset)   
-                    asset.custom_fields[match_field_mapping_name].value = match_key
-                    battery.remote_data = msgspec.msgpack.encode(asset)
-
-                battery.sync_status = "local_updated"
-                battery.local_modified_at = str(datetime.now().timestamp())
-                record_battery_history(db_session, battery)
-            
-
-        db_session.commit()
-
-    return jsonify({"message": "Battery assignment updated", "status": "success"}), 200
+    """Assign battery/batteries to a match and update local sync state."""
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return api_error("JSON body is required", 400)
+    response, status_code = get_tba_service().assign_battery_to_match(payload)
+    return jsonify(response), status_code
 
 
+@api.route("/v1/tba/sync", methods=["POST", "GET"])
 @api.route("/tba/sync", methods=["POST", "GET"])
 def trigger_tba_sync():
     """Trigger or check status of TBA match sync."""
     if request.method == "POST":
-        sync_job = redisq.enqueue(tba_sync.download_match_updates)
-        with sqlalchemy.orm.Session(engine) as db_session:
+        username = session.get("user_id")
+        if username is None:
+            return api_error("Authentication required", 401)
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
+            user = db_session.get(UserDb, username)
+            if user is None or (user.role or "viewer") != "admin":
+                return api_error("Admin access required", 403)
+        sync_job = get_queue().enqueue(tba_sync.download_match_updates)
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             kv = db_session.get(KVStoreDb, "last_tba_sync_job_id")
             if kv is None:
                 db_session.add(KVStoreDb(key="last_tba_sync_job_id", value=sync_job.id))
             else:
                 kv.value = sync_job.id
             db_session.commit()
-        return jsonify({"status": "Queued", "message": "TBA sync initiated"}), 202
+        return api_success("TBA sync initiated", data={"job_status": "queued"}, status_code=202)
     else:
-        with sqlalchemy.orm.Session(engine) as db_session:
+        with sqlalchemy.orm.Session(get_engine()) as db_session:
             kv = db_session.get(KVStoreDb, "last_tba_sync_job_id")
             if kv is not None:
                 try:
-                    sync_job = job.Job.fetch(kv.value, connection=Redis(os.getenv("REDIS_HOST", "localhost"), port=os.getenv("REDIS_PORT", 6379)))
+                    sync_job = job.Job.fetch(kv.value, connection=get_redis())
                 except rq.exceptions.NoSuchJobError:
                     sync_job = None
             else:
                 sync_job = None
         if sync_job is None:
-            return jsonify({"status": "No TBA sync job initiated"}), 404
-        return jsonify({"status": sync_job.get_status()}), 200
+            return api_error("No TBA sync job initiated", 404)
+        return api_success(data={"job_status": sync_job.get_status()})
